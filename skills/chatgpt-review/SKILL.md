@@ -27,7 +27,9 @@ GitHub 模式先读取 [GitHub Review 流程](references/github.md)，固定任�
 
 长期任务按当前工作项选择完整相关文件与本轮证据，历史留在本地并写成便携摘要。压缩后大小超预算则停止打包，明确重新收集范围，避免静默漏文件。具体规则见交换契约的“控制每轮大小”。
 
-ChatGPT 输出可直接转交的任务书或反馈；执行端回传可上传的 ZIP。没有传输工具时，输出材料和转交动作。只有真实工具可用且用户明确授权时才发送；执行端反馈不能替代用户授权。
+ChatGPT 输出可直接转交的任务书或反馈；执行端默认返回同一 PR 与完整 head SHA，ZIP 为备用。没有传输工具时输出转交材料。只有真实工具可用且用户明确授权时才发送，执行端反馈不能替代用户授权。
+
+用户需要执行端通过已登录 Chrome 转交 ChatGPT 指令、读取回复或调试网页时，按需读取 [可选浏览器入口](references/browser.md)。优先现有 browser-skill 的受控会话，agent-browser 用于独立测试备用。skill 不安装浏览器、不接管未经借用的标签页，也不绕过当前宿主的工具审批。
 
 ## 完成与停止
 
@@ -47,5 +49,7 @@ python "<skill>/scripts/relay.py" pack --project "<project>" --round 1
 ```
 
 首轮包含新建任务目录，不自动填写需求、执行测试、推送、创建 PR 或发送 ZIP。此 CLI 只初始化本地记录和打包，GitHub 流程由当前执行 Agent 的真实工具承担。调用前读取执行端流程。没有 Python 时，用可用工具实现相同记录与备用包契约。
+
+协调端已经确定新任务 ID 时，start 添加 --task-id <id>，已有任务则读取记录续接，不重新初始化。显式 --include 单个文件被过滤、超限或无法读取时打包失败；选择目录时允许安全过滤子项，但报告所有排除项。
 
 模板按需使用：[任务书](templates/TASK_BRIEF.template.md)、[持久状态](templates/HANDOFF.template.md)、[变更与审查报告](templates/REVIEW_REPORT.template.md)、[测试结果](templates/TEST_RESULTS.template.md)、[ChatGPT 续接摘要](templates/CHATGPT_BRIEF.template.md)、[审查反馈](templates/REVIEW_FEEDBACK.template.md)。

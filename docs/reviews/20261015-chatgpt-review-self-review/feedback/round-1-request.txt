@@ -1,0 +1,21 @@
+我们把你之前建议的 Review Relay v2 重构成了通用 skill，名字为 chatgpt-review，已经发布并在本地共享安装。现在正好用这个 skill 自审自身，请你作为协调与独立审查端给建议。
+
+仓库：https://github.com/kyrieove/chatgpt-review
+当前公开基线 commit SHA：c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22
+本轮 task_id：20261015-chatgpt-review-self-review
+本地工作分支：feature/chatgpt-review-self-review，尚未推送、尚无 PR。
+本轮先评审和规划，不执行发布、远端写入或合并。
+
+请实际用已连接的 GitHub 读取该 SHA 的 CHATGPT_START.md、skills/chatgpt-review/SKILL.md、references/github.md、references/contract.md、scripts/relay.py 和 tests/test_relay.py，路径均以 skills/chatgpt-review/ 为前缀的 references/scripts。若工具只能读默认分支或不能确认 SHA，请如实标记读取限制，不声称已读取整个仓库或运行未执行的测试。
+
+我们的目标：继续优化这个 skill，并评估把它做成可通过 Antigravity 插件管理器安装的 plugin，同时保留 Codex、Claude Code 等其他 Agent 的独立 skill 用法。已执行报告：当前 CLI 17 项测试，15 通过，2 项因 Windows 目录符号链接权限跳过；安装后 start/pack 的临时项目烟雾测试通过，五份任务记录与 ZIP 哈希核对通过。这些是执行端报告，请区分你的直接复核。
+
+官方插件文档：https://antigravity.google/docs/plugins/ 。官方描述 plugin.json + skills/ 的目录结构；请核对当前文档和 schema，不编造 manifest 字段、VSIX 格式或第三方 Marketplace 发布能力。
+
+请输出：
+1. 你实际读到的文件和版本证据；最多5个有定位/证据的改进项，区分确定缺陷、可疑问题和设计建议。
+2. 是否值得增加最小插件包装；推荐方案与取舍。优先保持一个协议来源，避免重复 skill、重复激活或无必要的 MCP/hooks。
+3. 一份可以直接交给本地执行 Agent 的第一轮任务书，明确范围、验收、测试、五份持久记录和下一步。
+4. 仍需我决定的最关键问题。
+
+执行端必须先在本地完成功能分支、测试与拟推送历史的凭据扫描，只有我的对应明确许可才推送或创建/更新同一个 Draft PR；你的审查通过不是发布授权，不自动合并。当前仅请你提出建议和任务书。

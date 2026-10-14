@@ -1,4 +1,7 @@
+import contextlib
 import hashlib
+import importlib.util
+import io
 import json
 import os
 import re
@@ -9,10 +12,14 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "chatgpt-review"
 SCRIPT = SKILL_ROOT / "scripts" / "relay.py"
+RELAY_SPEC = importlib.util.spec_from_file_location("chatgpt_review_relay", SCRIPT)
+relay = importlib.util.module_from_spec(RELAY_SPEC)
+RELAY_SPEC.loader.exec_module(relay)
 REQUIRED_TASK_FILES = (
     "HANDOFF.md",
     "REVIEW_REPORT.md",
@@ -61,8 +68,11 @@ def verify_manifest(archive):
 
 
 class RelayCliTests(unittest.TestCase):
-    def start(self, project, title="Example task"):
-        result = run_relay(project, "start", "--title", title)
+    def start(self, project, title="Example task", task_id=None):
+        args = ["start", "--title", title]
+        if task_id is not None:
+            args.extend(["--task-id", task_id])
+        result = run_relay(project, *args)
         self.assertEqual(result.returncode, 0, result.stderr)
         return task_id_from(result)
 
@@ -110,6 +120,76 @@ class RelayCliTests(unittest.TestCase):
             self.assertIn("<!-- chatgpt-review:managed-pointer -->", pointer.read_text(encoding="utf-8"))
             self.assertIn(second, pointer.read_text(encoding="utf-8"))
             self.assertNotIn(first, pointer.read_text(encoding="utf-8"))
+
+    def test_start_uses_the_exact_specified_task_id(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            requested = "20261015-chatgpt-review-self-review"
+
+            task_id = self.start(project, "Review round one", requested)
+
+            self.assertEqual(task_id, requested)
+            task_dir = project / "handoffs" / requested
+            for filename in REQUIRED_TASK_FILES:
+                self.assertIn(requested, (task_dir / filename).read_text(encoding="utf-8"))
+            self.assertEqual((project / "handoffs" / ".current-task").read_text().strip(), requested)
+            self.assertIn(requested, (project / "HANDOFF.md").read_text(encoding="utf-8"))
+
+    def test_start_rejects_invalid_task_ids_without_creating_handoffs(self):
+        for invalid in ("traversal", "separator", "too-short"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as temp:
+                project = Path(temp)
+                traversal_target = project.parent / f"{project.name}-outside"
+                task_id = {
+                    "traversal": f"../../{project.name}-outside",
+                    "separator": "bad/id",
+                    "too-short": "ab",
+                }[invalid]
+
+                result = run_relay(project, "start", "--title", "Invalid ID", "--task-id", task_id)
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("unrecognized arguments", result.stderr)
+                self.assertFalse((project / "handoffs").exists())
+                self.assertFalse(traversal_target.exists())
+
+    def test_start_collision_preserves_records_and_pointers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            original_id = "20261015-chatgpt-review-self-review"
+            self.start(project, "Original title", original_id)
+            original_dir = project / "handoffs" / original_id
+            original_records = {
+                filename: (original_dir / filename).read_bytes()
+                for filename in REQUIRED_TASK_FILES
+            }
+            self.start(project, "Move active pointer")
+            current_path = project / "handoffs" / ".current-task"
+            root_pointer = project / "HANDOFF.md"
+            current_before = current_path.read_bytes()
+            root_before = root_pointer.read_bytes()
+
+            result = run_relay(
+                project,
+                "start",
+                "--title",
+                "Replacement title",
+                "--task-id",
+                original_id,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("unrecognized arguments", result.stderr)
+            self.assertEqual(
+                {filename: (original_dir / filename).read_bytes() for filename in REQUIRED_TASK_FILES},
+                original_records,
+            )
+            self.assertEqual(current_path.read_bytes(), current_before)
+            self.assertEqual(root_pointer.read_bytes(), root_before)
+            self.assertEqual(
+                sorted(path.name for path in (project / "handoffs").iterdir() if path.is_dir()),
+                sorted([original_id, current_before.decode("utf-8").strip()]),
+            )
 
     def test_default_package_is_self_contained_and_hashes_copied_bytes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -311,6 +391,134 @@ class RelayCliTests(unittest.TestCase):
                 self.assertFalse(info["full_snapshot"])
                 self.assertNotIn("other.py", package.namelist())
 
+    def test_explicit_file_include_is_added_to_the_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            selected = project / "src" / "app.py"
+            selected.parent.mkdir()
+            selected.write_text("print('selected')\n", encoding="utf-8")
+
+            result = self.pack(project, 1, "--include", "src/app.py")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with zipfile.ZipFile(archive_from(result)) as package:
+                self.assertEqual(package.read("src/app.py"), selected.read_bytes())
+                info = json.loads(package.read("PACKAGE_INFO.json"))
+                self.assertEqual(info["selection_scope"]["includes"], ["src/app.py"])
+
+    def test_explicit_oversized_file_fails_without_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            oversized = project / "large.bin"
+            oversized.write_bytes(b"x" * (1024 * 1024 + 1))
+
+            result = self.pack(project, 1, "--include", "large.bin", "--max-file-mb", "1")
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("large.bin", result.stderr + result.stdout)
+            self.assertFalse((project / "review-artifacts").exists())
+
+    def test_explicit_sensitive_file_fails_without_exposing_content(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            selected = project / "api-token.txt"
+            selected.write_text("DO_NOT_PRINT_THIS_TOKEN\n", encoding="utf-8")
+
+            result = self.pack(project, 1, "--include", "api-token.txt")
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("api-token.txt", result.stderr + result.stdout)
+            self.assertNotIn("DO_NOT_PRINT_THIS_TOKEN", result.stderr + result.stdout)
+            self.assertFalse((project / "review-artifacts").exists())
+
+    def test_explicit_unreadable_file_fails_without_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            selected = project / "source.py"
+            selected.write_text("print('selected')\n", encoding="utf-8")
+            real_safe_read = relay._safe_read
+
+            def deny_selected(path):
+                if path == selected:
+                    raise PermissionError("access denied")
+                return real_safe_read(path)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(relay, "_safe_read", side_effect=deny_selected):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    result = relay.main(
+                        ["pack", "--round", "1", "--include", "source.py", "--project", str(project)]
+                    )
+
+            self.assertNotEqual(result, 0)
+            self.assertIn("source.py", stderr.getvalue() + stdout.getvalue())
+            self.assertFalse((project / "review-artifacts").exists())
+
+    def test_explicit_nonregular_file_fails_without_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            special = project / "special-source"
+            special.write_text("not a regular-file selection\n", encoding="utf-8")
+            real_is_file = Path.is_file
+
+            def mark_nonregular(path):
+                if path == special:
+                    return False
+                return real_is_file(path)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(Path, "is_file", mark_nonregular):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    result = relay.main(
+                        ["pack", "--round", "1", "--include", "special-source", "--project", str(project)]
+                    )
+
+            self.assertNotEqual(result, 0)
+            self.assertIn("special-source", stderr.getvalue() + stdout.getvalue())
+            self.assertFalse((project / "review-artifacts").exists())
+
+    def test_explicit_directory_include_reports_filtered_children(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            selected_dir = project / "src"
+            selected_dir.mkdir()
+            (selected_dir / "app.py").write_text("print('selected')\n", encoding="utf-8")
+            (selected_dir / ".env").write_text("TOKEN=private\n", encoding="utf-8")
+            (selected_dir / "large.bin").write_bytes(b"x" * (1024 * 1024 + 1))
+
+            result = self.pack(project, 1, "--include", "src", "--max-file-mb", "1")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with zipfile.ZipFile(archive_from(result)) as package:
+                self.assertIn("src/app.py", package.namelist())
+                self.assertNotIn("src/.env", package.namelist())
+                self.assertNotIn("src/large.bin", package.namelist())
+                info = json.loads(package.read("PACKAGE_INFO.json"))
+                self.assertIn("src/.env", info["skipped_paths"])
+                self.assertIn("src/large.bin", info["skipped_paths"])
+
+    def test_explicit_file_under_filtered_directory_fails_without_archive(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            filtered_dir = project / ".env.private"
+            filtered_dir.mkdir()
+            (filtered_dir / "source.py").write_text("print('private')\n", encoding="utf-8")
+
+            result = self.pack(project, 1, "--include", ".env.private/source.py")
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(".env.private/source.py", result.stderr + result.stdout)
+            self.assertFalse((project / "review-artifacts").exists())
+
     def test_secret_blocks_archive_before_output_and_reports_path_only(self):
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
@@ -369,6 +577,38 @@ class RelayCliTests(unittest.TestCase):
             result = self.pack(project, 1, "--include", "linked-source/source.py")
 
             self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((project / "review-artifacts").exists())
+
+    def test_explicit_include_rejects_mocked_link_without_platform_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project)
+            source_dir = project / "linked-source"
+            source_dir.mkdir()
+            (source_dir / "source.py").write_text("print('outside')\n", encoding="utf-8")
+            real_is_link = relay._is_link
+
+            def simulated_link(path):
+                return path == source_dir or real_is_link(path)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(relay, "_is_link", side_effect=simulated_link):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    result = relay.main(
+                        [
+                            "pack",
+                            "--round",
+                            "1",
+                            "--include",
+                            "linked-source/source.py",
+                            "--project",
+                            str(project),
+                        ]
+                    )
+
+            self.assertNotEqual(result, 0)
+            self.assertIn("linked-source/source.py", stderr.getvalue() + stdout.getvalue())
             self.assertFalse((project / "review-artifacts").exists())
 
     def test_missing_required_task_file_fails_without_archive(self):
@@ -476,6 +716,38 @@ class RelayCliTests(unittest.TestCase):
             result = self.pack(project, 1, "--evidence", "external/evidence.log")
 
             self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((project / "review-artifacts").exists())
+
+    def test_evidence_path_rejects_mocked_link_without_platform_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            task_id = self.start(project)
+            external = project / "handoffs" / task_id / "external"
+            external.mkdir()
+            (external / "evidence.log").write_text("external evidence\n", encoding="utf-8")
+            real_is_link = relay._is_link
+
+            def simulated_link(path):
+                return path == external or real_is_link(path)
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            with mock.patch.object(relay, "_is_link", side_effect=simulated_link):
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    result = relay.main(
+                        [
+                            "pack",
+                            "--round",
+                            "1",
+                            "--evidence",
+                            "external/evidence.log",
+                            "--project",
+                            str(project),
+                        ]
+                    )
+
+            self.assertNotEqual(result, 0)
+            self.assertIn("external/evidence.log", stderr.getvalue() + stdout.getvalue())
             self.assertFalse((project / "review-artifacts").exists())
 
     @unittest.skipUnless(shutil.which("git"), "git is not installed")
