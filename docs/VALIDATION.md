@@ -16,6 +16,12 @@ python -B -m unittest discover -s tests -v
 
 skill-creator 的 quick_validate 对 skills/chatgpt-review 返回 `Skill is valid!`。生成的 CHATGPT_START 与 chatgpt、github、contract 三份权威参考一致。
 
+待发布的 21 份文件完成凭据模式扫描，0 项警报；Git diff --check 通过。公开源码不含原蓝本目录、任务记录、审查 ZIP、缓存或本机凭据。
+
+## 源码发布核对
+
+用户此前明确要求将 skill 上传公开 Git 仓库，本次仅执行这一源码发布。仓库为 kyrieove/chatgpt-review，已查询确认 visibility=PUBLIC、默认分支 main、远端 SHA 与本地相同，主 skill 文件的远端 blob 哈希与本地相同。未创建、合并或更新任何用户开发任务 PR。
+
 ## 独立审查
 
 独立审查者核对了真实文件及场景输出，最终没有未解决的实质发现。场景包括目标 SHA 不可读、批准后内容变化、PR head 在审查中前进、测试版本与证据记录 commit 不同、CI artifact 不可读、双方换会话、审查争议及连续两轮修复无效。后者会生成诊断任务，不重复同一修法。
