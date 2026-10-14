@@ -1,26 +1,24 @@
-# 本轮验证结果
+# 第二轮验证结果
 
 - task_id: 20261015-chatgpt-review-self-review
+- 远端 PR: Draft PR #1 (https://github.com/kyrieove/chatgpt-review/pull/1)
+- 远端 Head SHA: a928ee26776fb82ed80c43df131234c7af2f67c8
 - 基线源码: c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22
-- 当前状态: 实施完成，本地测试全量通过
+- 当前状态: 第二轮实现与端到端实测全量通过
 
 | 检查项 | 结果 | 证据 / 实际输出 |
 |---|---|---|
-| 完整 CLI 单元测试 | PASS (29 pass, 2 skip) | `python -B -m unittest discover -s tests -v`：Ran 31 tests in 19.7s; OK (skipped=2, 符号链接受平台权限限制) |
-| 符号链接 mock 隔离测试 | PASS | `test_evidence_path_rejects_mocked_link_without_platform_symlink` & `test_explicit_include_rejects_mocked_link_without_platform_symlink` 均 PASS |
-| 显式文件边界防护测试 | PASS | `test_explicit_oversized_file_fails_without_archive` 等 7 项显式包含安全与失败用例 PASS |
-| 任务 ID 扩展与防冲突测试 | PASS | `test_start_uses_the_exact_specified_task_id`, `test_start_collision_preserves_records_and_pointers` 等 4 项 PASS |
-| 根目录 plugin manifest 解析 | PASS | `test_manifest_uses_one_existing_skill` PASS；Manifest 仅包含 name 与 description |
-| 文档一致性与重新生成 | PASS | `test_committed_bootstrap_matches_generation_and_tracks_reference_changes` PASS |
-| 源码 diff 语法与空白检查 | PASS | `git diff --check` 返回退出码 0，无空白或语法冲突 |
-| Antigravity CLI 插件校验 | PASS | `agy plugin validate .` 返回退出码 0，输出 `skills: 1 processed`，其他未配置项正常 skipped |
-| bsk Daemon 与浏览器连接 | PASS | `bsk status --json` 返回 daemon v0.3.2 运行正常，Chrome 155.0.0.0 扩展连接正常 |
-| Chrome 操作与 JavaScript 评估 | PASS | `bsk observe` 成功解析 VOM；`bsk evaluate` 成功执行 JS 并返回预期值 (`1 + 1` -> 2) |
-| Chrome 标签页借用与归还 | PASS | 经借用确认成功借用 ChatGPT 标签页 (1587806085)，内容与记录一致；调用 `tab return` 干净归还 |
-| 工作区与拟推送历史凭据扫描 | PASS | 扫描本地工作区、diff 与拟提交文件，未发现私钥、API Token 或敏感环境信息 |
-| 安全审查 ZIP 打包验证 | PASS | 由 `relay.py pack` 完成打包，包含完整 SHA256SUMS 与元数据 |
+| 全量单元测试 (含 browser_relay) | PASS (37 pass, 2 skip) | `python -B -m unittest discover -s tests -v`：Ran 39 tests in 19.3s; OK (skipped=2, 符号链接受平台权限限制) |
+| browser_relay 独立单元测试 | PASS (8/8 pass) | `test_browser_relay.py` 8 项测试覆盖连接、标签页解析、超时、防重发、交付验证与安全退出清理 |
+| 隔离环境 Antigravity 插件识别 | PASS | `agy plugin validate <isolated_tmp>`：返回退出码 0，输出 `✔ skills: 1 processed`，其他 skipped |
+| 同名 Skill 重复激活风险分析 | ASSESSED | 评估确认：若同名 Skill 与 Plugin 同时存在，Antigravity 会产生双入口或潜在 shadowing，确立 Plugin 为唯一生效源的原则 |
+| browser-relay 真实 E2E 交互 | PASS | 通过 `browser_relay.py relay` 成功连接 Chrome，借用标签页 1587806085，提取完整 ChatGPT 回复并保存，干净归还标签页 |
+| request_id 幂等防重发测试 | PASS | 单元测试验证：当页面已包含指定 request_id 时，`send_prompt` 自动跳过重复提交 |
+| 标签页借用审批超时保护 | PASS | 单元测试与实机验证：借用超时后抛出 `ApprovalRequiredError`，安全退出并清理 session，维持人工转交可用性 |
+| 工作区与拟推送历史凭据扫描 | PASS | 扫描新增文件、diff 与暂存区，未发现未授权私钥或 API Token |
+| 备用审查 ZIP 打包验证 | PASS | 由 `relay.py pack` 输出符合协议规范的 ZIP 文件，包含 SHA256SUMS 与完整元数据 |
 
 ## 限制与未验证项
 
-1. **全局插件安装与 UI 交互**: 依据用户“不改全局激活配置”要求，仅在隔离目录与 `validate` 层面验证，未执行 `agy plugin install` 覆盖全局配置。
-2. **远端 GitHub 写入**: 尚未推送至远端分支，尚无 Draft PR，遵循用户未授权不写入原则。
+1. **全局环境插件激活**: 依据不修改全局配置的约束，未执行全局 `agy plugin install`，仅在隔离环境验证 manifest 与目录结构。
+2. **第二轮远端推送**: 本地新增的 browser_relay 代码及第二轮任务记录尚未推送到 Draft PR #1，等待用户明确许可。

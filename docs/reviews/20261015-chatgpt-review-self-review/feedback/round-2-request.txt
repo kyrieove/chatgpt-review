@@ -1,0 +1,25 @@
+[REQ-20261015-ROUND2-001]
+我们已按你第一轮建议（F-001 ~ F-005）完成实现与跨平台测试，并已取得用户明确许可推送到远端并创建了 Draft PR。请你通过连接的 GitHub 直接复审该提交与 PR：
+
+任务身份：
+- 仓库：https://github.com/kyrieove/chatgpt-review
+- 功能分支：feature/chatgpt-review-self-review
+- 复审基线 Commit SHA：c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22
+- 当前 Head Commit SHA：a928ee26776fb82ed80c43df131234c7af2f67c8
+- Draft PR：https://github.com/kyrieove/chatgpt-review/pull/1
+- task_id：20261015-chatgpt-review-self-review
+- request_id：REQ-20261015-ROUND2-001
+
+本轮闭环证据：
+1. F-001（接口缺口）：`relay.py start` 新增 `--task-id` 支持，校验合法格式，已有任务防覆盖。4 项测试 PASS。
+2. F-002（行为缺陷）：`relay.py pack` 明确显式 `--include` 单文件失败边界（超限/不可读/敏感/过滤直接中断打包）；显式目录记录 `skipped_paths`。7 项测试 PASS。
+3. F-003（最小 Plugin）：根目录新增 `plugin.json`，复用原有唯一 `skills/chatgpt-review/SKILL.md`。`agy plugin validate .` 通过。
+4. F-004（测试覆盖）：在 `tests/test_relay.py` 中增加 mock 隔离测试，39 项测试全部验证通过（2 项 Windows 原生符号链接安全跳过）。
+5. F-005（凭据门禁）：文档明确区分 commit 历史凭据检查与 ZIP 暂存检查两级门禁；`test_plugin.py` 增加入口文档与生成脚本一致性校验。
+6. 浏览器中继：实现最小 `browser_relay.py` 原型，复用已有 `bsk` 连接，支持 request_id 幂等防重发与借用超时保护。
+
+请你用连接的 GitHub 读取 Draft PR #1 或 Commit SHA a928ee26776fb82ed80c43df131234c7af2f67c8 进行第二轮复审，并输出：
+1. 本地实现与测试证据是否完全满足第一轮验收要求；
+2. 对当前代码状态的审查结论（是否建议 Ready for review / 合并）；
+3. 针对 Antigravity 激活来源的最终建议（推荐根目录 Plugin 作为唯一入口）；
+4. 是否有下一轮改动建议。
