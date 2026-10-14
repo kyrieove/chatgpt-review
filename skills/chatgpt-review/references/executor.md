@@ -14,6 +14,8 @@ python "<skill>/scripts/relay.py" start --project "<project>" --title "<title>"
 
 工具创建五份任务记录，未填写字段由执行端补全。把任务书写入 TASK_BRIEF，记录仓库、功能分支、base、实际状态、验收与首个命令。不要初始化已有任务。
 
+协调端给定新任务 ID 时添加 --task-id <id>；工具会按原样创建，冲突或非法 ID 会失败。已有记录无论位于默认目录还是已登记的其他路径，都先续接，不因工具默认目录没找到它而重复新建。
+
 续接时读活动任务指针或明确指定的记录路径，再读五份记录与未处理反馈。GitHub 模式核对同一 PR、当前本地和远端 SHA、未推送改动与待批准内容。已完成工作不重做，旧结论因源码变化失效时明确记录，勿覆盖其他任务。
 
 ## 执行与证据
@@ -35,6 +37,10 @@ python "<skill>/scripts/relay.py" start --project "<project>" --title "<title>"
 本地完成时先提供可审阅的 commits、diff、TEST_RESULTS、凭据检查和 Draft PR 文案。无对应许可则停在 AWAITING_PUSH_APPROVAL，不能用备用 ZIP 跳过远端许可。
 
 获许可后推送并创建或更新同一 Draft PR，核对远端 head/base SHA 与 draft 状态，返回 PR URL、task_id、round、被审查 head SHA、变更、测试及下一步。将可分享的五份记录发布到已许可的远端范围，不能只保留本地记录而声称新 ChatGPT 能读取它们。
+
+推送前检查记录必须独立于 ZIP 检查：pack 只扫描本次暂存进 ZIP 的字节，不扫描拟推送的全部新增 commit 历史。核对工作树、暂存区、拟推送范围及发布文案，记录方法和结果；历史范围无法核实时不能报告发布准备完成。
+
+具备用户授权的 Chrome 操作需求时读取 [浏览器转交与调试](browser.md)，先验证连接、会话及实际页面能力，再发送任务书或采集证据。浏览器读取成功不授权 push 或 PR。
 
 若项目忽略默认 handoffs 路径，可选择用户允许跟踪的审查记录目录并更新入口指针。不要修改整份忽略规则或把原始私密日志全部加入仓库。可选 CLI 的备用打包仍按 handoffs 目录定位任务，使用其他记录路径时按交换契约手动准备备用包。
 

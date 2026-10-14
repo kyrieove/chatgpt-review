@@ -19,6 +19,18 @@
 
 skill 不建立 GitHub 连接，也不提供自动聊天传输。连接器可读内容和版本需要实际核对。ChatGPT 不能查看本地未推送文件；读不到目标 SHA、PR 或日志时补充固定版本材料或备用 ZIP。
 
+## Antigravity Plugin 与独立 Skill
+
+仓库根目录的 plugin.json 直接复用 skills/chatgpt-review，不复制另一套协议。可按 Antigravity 支持的方式从本地目录或 GitHub 安装；其他 Agent 继续读取原 skill 目录。当前提供最小插件包装，不加入 MCP、hooks 或额外运行依赖。
+
+同一 Antigravity 环境已有全局同名 Skill 时，先在隔离工作区验证插件识别及重复加载情况，再决定是否将 Plugin 作为唯一激活入口。验证插件正常不自动授权停用共享 Skill 或更改全局配置。
+
+## 可选 Chrome 协作入口
+
+有本地终端能力的执行 Agent 可按 references/browser.md 使用现有 browser-skill 或 agent-browser。前者通过已有扩展与受控 Agent Window 使用当前 Chromium 登录环境，已有用户标签页须借用；后者默认适合独立浏览器测试。Antigravity 原生浏览器使用独立 profile，不能直接当作日常 Chrome 的登录环境。
+
+此集成是按需流程，不是自动配置器。先验证真实 CLI、扩展、会话与页面操作，遵守宿主工具审批和用户授权，不导出 Cookie、不自动开调试端口。使用浏览器转交需明确目标 ChatGPT 聊天和发送授权；回复不会自动授权代码发布。
+
 ## 持久记录与双方续接
 
 每个任务维护以下记录，并在 GitHub 模式下将可分享版本保存到已许可的远端路径：
@@ -54,6 +66,8 @@ python "<skill>/scripts/relay.py" pack --project "<project>" --round 1
 
 初始化后 Agent 补全五份记录。ZIP 自带 ChatGPT 说明、GitHub 流程、任务状态、选定完整源码和哈希，换聊天可以独立恢复。没有 Python 时使用 Agent 的可用工具按同一契约完成。
 
+已确定的新任务身份可传 start --task-id <id>。已有同 ID 任务直接续接，工具拒绝覆盖。显式 --include 单个文件超限、不可读或被过滤会失败，目录内的安全过滤仍以元数据报告。
+
 每轮用 `--include` 选择完整相关源码、调用方、测试、依赖和资源；用 `--evidence` 选择本轮日志与必要未决反馈，五份记录始终加入。旧已解决历史写入事实摘要，原始历史保留本地。未指定 evidence 时保留当前任务的全部可分享记录。
 
 ```text
@@ -63,6 +77,8 @@ python "<skill>/scripts/relay.py" pack --project "<project>" --round 3 --include
 示例路径须替换为实际存在的路径。压缩后默认硬预算为 25 MiB，这是工具预算，不是平台上传限制。超限拒绝生成新最终 ZIP，报告体积与大文件，不静默删材料。相关范围仍超预算时安排带统一身份和索引的分卷上传，工具不自动分卷。
 
 Git 状态与 diff 同样只包含本包允许分享的范围，不会带入相邻项目或被排除的环境变量文件、数据库内容。过滤后的空状态不能证明整个仓库没有改动。分享前仍检查源码、日志、截图及拟推送的新增 commit 历史。
+
+pack 的凭据扫描只覆盖本次 ZIP 暂存内容，不能替代推送前的完整新增 commit 范围检查。无法确认待推送历史及检查结果时保持本地待审查状态。
 
 ## 维护与验证
 
