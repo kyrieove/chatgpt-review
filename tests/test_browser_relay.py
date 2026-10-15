@@ -16,13 +16,31 @@ SPEC.loader.exec_module(browser_relay)
 ApprovalRequiredError = browser_relay.ApprovalRequiredError
 BrowserRelay = browser_relay.BrowserRelay
 BrowserRelayError = browser_relay.BrowserRelayError
+ConversationMismatchError = browser_relay.ConversationMismatchError
 DeliveryError = browser_relay.DeliveryError
 TabInfo = browser_relay.TabInfo
+TabNotFoundError = browser_relay.TabNotFoundError
+build_check_user_turn_js = browser_relay.build_check_user_turn_js
+build_extract_js = browser_relay.build_extract_js
+validate_chatgpt_origin = browser_relay.validate_chatgpt_origin
 
 
 class BrowserRelayTests(unittest.TestCase):
     def setUp(self):
         self.relay = BrowserRelay(bsk_executable="mock-bsk")
+        self.dom_fixture = ROOT / "tests" / "dom_fixture.js"
+
+    def run_in_dom(self, dom_def, js_code):
+        """Helper executing real JavaScript in Node.js against a simulated DOM tree."""
+        payload = json.dumps({"dom": dom_def, "js": js_code})
+        proc = subprocess.run(
+            ["node", str(self.dom_fixture)],
+            input=payload,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return json.loads(proc.stdout)
 
     def test_check_status_parses_running_daemon(self):
         status_json = json.dumps({
@@ -70,21 +88,255 @@ class BrowserRelayTests(unittest.TestCase):
             sess = self.relay.start_session("browser-1", "task-1")
             self.assertEqual(sess, "test-sess-123")
 
-    def test_list_and_find_chatgpt_tab(self):
+    def test_find_target_tab_with_explicit_url_and_id(self):
         output = """TAB         SCOPE  WIN         TITLE                       URL
-1587806085  user   1587805881  ChatGPT Review Session      https://chatgpt.com/g/g-test
-1587806116  user   1587805881  GitHub Repository           https://github.com/test
+1587806085  user   1587805881  ChatGPT Review Session      https://chatgpt.com/c/target-123
+1587806116  user   1587805881  Other ChatGPT Session       https://chatgpt.com/c/other-456
 """
         with mock.patch.object(self.relay, "_run_bsk") as mock_bsk:
             mock_bsk.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
-            tabs = self.relay.list_user_tabs("sess-1")
-            self.assertEqual(len(tabs), 2)
-            self.assertEqual(tabs[0].tab_id, "1587806085")
-            self.assertEqual(tabs[0].url, "https://chatgpt.com/g/g-test")
+            tab = self.relay.find_target_tab("sess-1", target_url_prefix="https://chatgpt.com/c/target-123")
+            self.assertEqual(tab.tab_id, "1587806085")
 
-            target = self.relay.find_chatgpt_tab("sess-1")
-            self.assertIsNotNone(target)
-            self.assertEqual(target.tab_id, "1587806085")
+            tab_by_id = self.relay.find_target_tab("sess-1", target_tab_id="1587806116")
+            self.assertEqual(tab_by_id.tab_id, "1587806116")
+
+    def test_find_target_tab_rejects_wrong_conversation_or_ambiguous(self):
+        output = """TAB         SCOPE  WIN         TITLE                       URL
+1587806085  user   1587805881  ChatGPT Review Session      https://chatgpt.com/c/target-123
+1587806116  user   1587805881  Other ChatGPT Session       https://chatgpt.com/c/other-456
+"""
+        with mock.patch.object(self.relay, "_run_bsk") as mock_bsk:
+            mock_bsk.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.find_target_tab("sess-1")
+
+            with self.assertRaises(TabNotFoundError):
+                self.relay.find_target_tab("sess-1", target_tab_id="9999999999")
+
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.find_target_tab(
+                    "sess-1", target_tab_id="1587806085", target_url_prefix="https://chatgpt.com/c/mismatched"
+                )
+
+    # --- F-010 Origin & Navigation Tests ---
+
+    def test_validate_chatgpt_origin_rules(self):
+        self.assertTrue(validate_chatgpt_origin("https://chatgpt.com"))
+        self.assertTrue(validate_chatgpt_origin("https://chatgpt.com/c/target-123"))
+        self.assertTrue(validate_chatgpt_origin("https://www.chatgpt.com/g/g-model"))
+        # Non-HTTPS
+        self.assertFalse(validate_chatgpt_origin("http://chatgpt.com/c/target-123"))
+        # Malicious subdomains / typosquats
+        self.assertFalse(validate_chatgpt_origin("https://chatgpt.com.evil.com/c/target-123"))
+        self.assertFalse(validate_chatgpt_origin("https://fakechatgpt.com/c/123"))
+        self.assertFalse(validate_chatgpt_origin("https://chatgpt.com.attacker.org"))
+        # Non-ChatGPT domains
+        self.assertFalse(validate_chatgpt_origin("https://example.com"))
+        self.assertFalse(validate_chatgpt_origin("https://github.com"))
+        # Invalid port
+        self.assertFalse(validate_chatgpt_origin("https://chatgpt.com:8443"))
+
+    def test_find_target_tab_rejects_non_chatgpt_and_typosquat_origins(self):
+        output = """TAB         SCOPE  WIN         TITLE                       URL
+1001        user   1587805881  Example Site                https://example.com/page
+1002        user   1587805881  Evil Phishing Site          https://chatgpt.com.evil.com/login
+1003        user   1587805881  Insecure HTTP ChatGPT       http://chatgpt.com/c/test
+"""
+        with mock.patch.object(self.relay, "_run_bsk") as mock_bsk:
+            mock_bsk.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
+            # Specifying non-ChatGPT or typosquat tab ID must raise ConversationMismatchError
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.find_target_tab("sess-1", target_tab_id="1001")
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.find_target_tab("sess-1", target_tab_id="1002")
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.find_target_tab("sess-1", target_tab_id="1003")
+
+            # Specifying malicious target URL prefix raises ValueError
+            with self.assertRaises(ValueError):
+                self.relay.find_target_tab("sess-1", target_url_prefix="https://chatgpt.com.evil.com")
+
+    def test_run_e2e_review_detects_post_borrow_navigation_and_cleans_up(self):
+        with mock.patch.object(self.relay, "check_status") as mock_status, \
+             mock.patch.object(self.relay, "start_session") as mock_start, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
+             mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "return_tab") as mock_return, \
+             mock.patch.object(self.relay, "stop_session") as mock_stop:
+
+            mock_status.return_value = browser_relay.BrowserStatus(
+                daemon_running=True, connected_browser_id="b-1"
+            )
+            mock_start.return_value = "sess-nav"
+            mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/123")
+            mock_borrow.return_value = True
+            # Simulate navigation/redirect to non-ChatGPT malicious origin after borrow
+            mock_url.return_value = "https://evil-redirect.com/login"
+
+            result = self.relay.run_e2e_review(
+                "task-nav", "test [REQ-NAV]", "REQ-NAV", target_url_prefix="https://chatgpt.com/c/123"
+            )
+
+            self.assertEqual(result["status"], "BLOCKED_CONVERSATION_MISMATCH")
+            self.assertIn("Tab navigation detected", result["error"])
+            # Tab return and session stop must be called in finally
+            mock_return.assert_called_once_with("sess-nav", "tab-1")
+            mock_stop.assert_called_once_with("sess-nav")
+
+    # --- F-007 / F-008 Real DOM JavaScript Execution Tests via Node.js ---
+
+    def test_dom_execution_scenario_1_assistant_echoes_request_id(self):
+        """Scenario 1: Assistant reply echoes request_id.
+
+        Must NOT mistake assistant turn for user turn, and must extract full reply without truncation.
+        """
+        req_id = "REQ-ECHO-20261015"
+        full_reply = f"已收到审查请求 {req_id}。经过细致复查：\n1. F-001 修复有效\n2. 建议 Ready。"
+        dom = {
+            "tag": "main",
+            "children": [
+                {
+                    "tag": "article",
+                    "attrs": {"data-message-author-role": "user"},
+                    "text": f"请审查提交 [{req_id}] 并给出反馈。",
+                },
+                {
+                    "tag": "article",
+                    "attrs": {"data-message-author-role": "assistant"},
+                    "children": [
+                        {
+                            "tag": "div",
+                            "attrs": {"class": "prose markdown"},
+                            "text": full_reply,
+                        }
+                    ],
+                },
+            ],
+        }
+
+        # Check user turn
+        js_check = build_check_user_turn_js(req_id)
+        res_check = self.run_in_dom(dom, js_check)
+        self.assertTrue(res_check["exists"])
+        self.assertEqual(res_check["status"], "OK")
+
+        # Extract assistant turn
+        js_extract = build_extract_js(req_id)
+        res_extract = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res_extract["status"], "OK")
+        self.assertFalse(res_extract["isGenerating"])
+        self.assertEqual(res_extract["text"], full_reply)
+        self.assertEqual(res_extract["textLength"], len(full_reply))
+
+    def test_dom_execution_scenario_2_multiple_rounds_targets_correct_turn(self):
+        """Scenario 2: Multiple conversation rounds.
+
+        Must locate the exact user turn and extract its immediate adjacent assistant turn only.
+        """
+        req_target = "REQ-TARGET-ROUND-2"
+        dom = {
+            "tag": "main",
+            "children": [
+                # Round 1
+                {"tag": "article", "attrs": {"data-message-author-role": "user"}, "text": "第1轮提示词 [REQ-ROUND-1]"},
+                {"tag": "article", "attrs": {"data-message-author-role": "assistant"}, "children": [{"tag": "div", "attrs": {"class": "prose"}, "text": "第1轮反馈正文"}]},
+                # Round 2 (Target)
+                {"tag": "article", "attrs": {"data-message-author-role": "user"}, "text": f"第2轮复查提示词 [{req_target}]"},
+                {"tag": "article", "attrs": {"data-message-author-role": "assistant"}, "children": [{"tag": "div", "attrs": {"class": "prose"}, "text": "第2轮专属审查结果：全量通过"}]},
+                # Round 3
+                {"tag": "article", "attrs": {"data-message-author-role": "user"}, "text": "第3轮新提示词 [REQ-ROUND-3]"},
+                {"tag": "article", "attrs": {"data-message-author-role": "assistant"}, "children": [{"tag": "div", "attrs": {"class": "prose"}, "text": "第3轮反馈正文"}]},
+            ],
+        }
+
+        js_extract = build_extract_js(req_target)
+        res = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res["status"], "OK")
+        self.assertEqual(res["text"], "第2轮专属审查结果：全量通过")
+
+    def test_dom_execution_scenario_3_only_assistant_quotes_request_id(self):
+        """Scenario 3: Only assistant turn quotes request_id (user turn does not have it).
+
+        Must return USER_TURN_NOT_FOUND and NOT treat assistant turn as user turn.
+        """
+        req_ghost = "REQ-GHOST-999"
+        dom = {
+            "tag": "main",
+            "children": [
+                {"tag": "article", "attrs": {"data-message-author-role": "user"}, "text": "普通用户消息，没有token"},
+                {"tag": "article", "attrs": {"data-message-author-role": "assistant"}, "children": [{"tag": "div", "attrs": {"class": "prose"}, "text": f"我在回复中提到了一个历史ID {req_ghost}"}]},
+            ],
+        }
+
+        # User turn check must be false
+        js_check = build_check_user_turn_js(req_ghost)
+        res_check = self.run_in_dom(dom, js_check)
+        self.assertFalse(res_check["exists"])
+        self.assertEqual(res_check["status"], "USER_TURN_NOT_FOUND")
+
+        # Extract response must report USER_TURN_NOT_FOUND
+        js_extract = build_extract_js(req_ghost)
+        res_extract = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res_extract["status"], "USER_TURN_NOT_FOUND")
+        self.assertEqual(res_extract["text"], "")
+
+    def test_dom_execution_scenario_4_no_reliable_node_structure_returns_blocked(self):
+        """Scenario 4: No reliable DOM node structure (raw text / unsupported layout).
+
+        Must return BLOCKED_DOM_NOT_SUPPORTED, never guess or slice strings.
+        """
+        req_test = "REQ-UNSTRUCTURED-001"
+        dom = {
+            "tag": "main",
+            "children": [
+                # Unstructured divs without article or role attributes
+                {"tag": "div", "text": f"Raw text with {req_test} and some following answer text"},
+            ],
+        }
+
+        js_check = build_check_user_turn_js(req_test)
+        res_check = self.run_in_dom(dom, js_check)
+        self.assertFalse(res_check["exists"])
+        self.assertEqual(res_check["status"], "BLOCKED_DOM_NOT_SUPPORTED")
+
+        js_extract = build_extract_js(req_test)
+        res_extract = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res_extract["status"], "BLOCKED_DOM_NOT_SUPPORTED")
+        self.assertEqual(res_extract["text"], "")
+
+    def test_dom_execution_strips_button_bars_and_action_controls(self):
+        """Verifies that copy buttons, edit buttons, and SVG icons are cleanly removed."""
+        req_id = "REQ-CLEAN-TEXT"
+        dom = {
+            "tag": "main",
+            "children": [
+                {"tag": "article", "attrs": {"data-message-author-role": "user"}, "text": f"Message [{req_id}]"},
+                {
+                    "tag": "article",
+                    "attrs": {"data-message-author-role": "assistant"},
+                    "children": [
+                        {
+                            "tag": "div",
+                            "attrs": {"class": "prose"},
+                            "children": [
+                                {"tag": "p", "text": "纯净的审查反馈正文。"},
+                                {"tag": "button", "attrs": {"aria-label": "Copy"}, "text": "复制"},
+                                {"tag": "button", "attrs": {"data-testid": "feedback-button"}, "text": "反馈"},
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+
+        js_extract = build_extract_js(req_id)
+        res = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res["status"], "OK")
+        self.assertEqual(res["text"], "纯净的审查反馈正文。")
+
+    # --- General Relay Mechanism Tests ---
 
     def test_borrow_tab_raises_approval_required_on_timeout(self):
         with mock.patch.object(self.relay, "_run_bsk") as mock_bsk:
@@ -97,30 +349,96 @@ class BrowserRelayTests(unittest.TestCase):
             with self.assertRaises(ApprovalRequiredError):
                 self.relay.borrow_tab("sess-1", "tab-1", timeout_secs=1)
 
-    def test_idempotency_check_skips_duplicate_send(self):
-        with mock.patch.object(self.relay, "evaluate") as mock_eval:
-            mock_eval.return_value = "true"
-            self.assertTrue(self.relay.check_request_exists("sess-1", "REQ-2026-001"))
-            res = self.relay.send_prompt("sess-1", "hello", "REQ-2026-001")
-            self.assertTrue(res)
-            # Evaluated once for explicit check, once inside send_prompt idempotency guard
-            self.assertEqual(mock_eval.call_count, 2)
+    def test_send_prompt_rejects_message_without_embedded_request_id(self):
+        with self.assertRaises(ValueError):
+            self.relay.send_prompt("sess-1", "message without token", "REQ-MISSING-123")
 
-    def test_send_prompt_verifies_delivery(self):
-        eval_responses = [
-            "false",
-            "OK",
-            "CLICKED",
-            "true",
-        ]
-        with mock.patch.object(self.relay, "evaluate", side_effect=eval_responses):
-            res = self.relay.send_prompt("sess-1", "test message", "REQ-002")
+    def test_old_request_id_skips_duplicate_send_on_matching_hash(self):
+        msg = "msg with [REQ-EXISTING-001]"
+        with mock.patch.object(self.relay, "evaluate") as mock_eval:
+            mock_eval.return_value = json.dumps({
+                "exists": True,
+                "status": "OK",
+                "userText": msg,
+            })
+            res = self.relay.send_prompt("sess-1", msg, "REQ-EXISTING-001")
             self.assertTrue(res)
+            self.assertEqual(mock_eval.call_count, 1)
+
+    def test_send_prompt_raises_delivery_error_on_idempotency_content_conflict(self):
+        """If user turn with request_id exists but content is different, raise DeliveryError."""
+        with mock.patch.object(self.relay, "evaluate") as mock_eval:
+            mock_eval.return_value = json.dumps({
+                "exists": True,
+                "status": "OK",
+                "userText": "Original prompt content [REQ-CONFLICT-001]",
+            })
+            with self.assertRaises(DeliveryError) as ctx:
+                self.relay.send_prompt(
+                    "sess-1",
+                    "Completely different prompt [REQ-CONFLICT-001]",
+                    "REQ-CONFLICT-001",
+                )
+            self.assertIn("Idempotency conflict", str(ctx.exception))
+
+    def test_user_message_delivery_unconfirmed_raises_delivery_error(self):
+        eval_responses = [
+            json.dumps({"exists": False, "status": "USER_TURN_NOT_FOUND"}),  # check existence before send
+            "OK",                                                            # prompt injection
+            "CLICKED",                                                       # click send button
+        ] + [json.dumps({"exists": False, "status": "USER_TURN_NOT_FOUND"})] * 15  # verification checks fail
+        with mock.patch.object(self.relay, "evaluate", side_effect=eval_responses):
+            with self.assertRaises(DeliveryError):
+                self.relay.send_prompt("sess-1", "msg [REQ-UNCONFIRMED]", "REQ-UNCONFIRMED", delivery_timeout=0.02)
+
+    def test_normal_complete_reply_extracted_accurately(self):
+        complete_reply = "完整的第二轮审查反馈正文\n1. F-001 确认修复\n2. 建议 Ready"
+        complete_json = json.dumps({"status": "OK", "isGenerating": False, "textLength": len(complete_reply), "text": complete_reply})
+        with mock.patch.object(self.relay, "evaluate", return_value=complete_json):
+            res = self.relay.wait_for_response("sess-1", "REQ-NORMAL", timeout_secs=10, poll_interval=0.01)
+            self.assertEqual(res["status"], "COMPLETE")
+            self.assertEqual(res["text"], complete_reply)
+            self.assertEqual(res["length"], len(complete_reply))
+
+    def test_streaming_reply_not_finished_reaches_timeout(self):
+        streaming_response = json.dumps({
+            "status": "GENERATING",
+            "isGenerating": True,
+            "textLength": 50,
+            "text": "正在流式生成中...",
+        })
+        with mock.patch.object(self.relay, "evaluate", return_value=streaming_response):
+            res = self.relay.wait_for_response("sess-1", "REQ-STREAMING", timeout_secs=0.05, poll_interval=0.01)
+            self.assertEqual(res["status"], "TIMEOUT")
+            self.assertTrue(res["is_generating"])
+
+    def test_assistant_turn_not_found_returns_timeout_with_diagnostic(self):
+        not_found_response = json.dumps({
+            "status": "USER_TURN_NOT_FOUND",
+            "isGenerating": False,
+            "text": "",
+        })
+        with mock.patch.object(self.relay, "evaluate", return_value=not_found_response):
+            res = self.relay.wait_for_response("sess-1", "REQ-NOTFOUND", timeout_secs=0.05, poll_interval=0.01)
+            self.assertEqual(res["status"], "TIMEOUT")
+            self.assertEqual(res["text"], "")
+
+    def test_wait_for_response_immediately_returns_blocked_on_dom_not_supported(self):
+        blocked_response = json.dumps({
+            "status": "BLOCKED_DOM_NOT_SUPPORTED",
+            "isGenerating": False,
+            "text": "",
+            "reason": "No recognizable turn nodes in DOM",
+        })
+        with mock.patch.object(self.relay, "evaluate", return_value=blocked_response):
+            res = self.relay.wait_for_response("sess-1", "REQ-BLOCKED", timeout_secs=10, poll_interval=0.01)
+            self.assertEqual(res["status"], "BLOCKED")
+            self.assertEqual(res["reason"], "BLOCKED_DOM_NOT_SUPPORTED")
 
     def test_run_e2e_review_always_cleans_up_on_approval_timeout(self):
         with mock.patch.object(self.relay, "check_status") as mock_status, \
              mock.patch.object(self.relay, "start_session") as mock_start, \
-             mock.patch.object(self.relay, "find_chatgpt_tab") as mock_find, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
              mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
              mock.patch.object(self.relay, "return_tab") as mock_return, \
              mock.patch.object(self.relay, "stop_session") as mock_stop:
@@ -130,15 +448,134 @@ class BrowserRelayTests(unittest.TestCase):
                 connected_browser_id="b-1",
             )
             mock_start.return_value = "sess-cleanup"
-            mock_find.return_value = TabInfo("tab-123", "user", "w-1", "ChatGPT", "https://chatgpt.com")
+            mock_find.return_value = TabInfo("tab-123", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/123")
             mock_borrow.side_effect = ApprovalRequiredError("timed out waiting for human confirmation")
 
-            result = self.relay.run_e2e_review("task-1", "msg", "req-1")
+            result = self.relay.run_e2e_review("task-1", "msg [REQ-1]", "REQ-1")
 
             self.assertEqual(result["status"], "BLOCKED_WAITING_HUMAN_APPROVAL")
             self.assertTrue(result["manual_fallback_required"])
             mock_stop.assert_called_once_with("sess-cleanup")
 
+    # --- r4 Regression Tests (must fail on r3 code) ---
+
+    def test_send_prompt_fails_closed_on_pre_send_parse_error(self):
+        """F-008: Pre-send DOM check exception/error must fail-closed."""
+        with mock.patch.object(self.relay, "check_user_turn_exists") as mock_check:
+            mock_check.return_value = {"exists": False, "status": "EVALUATE_PARSE_ERROR", "raw": "syntax error"}
+            with self.assertRaises(DeliveryError) as ctx:
+                self.relay.send_prompt("sess-1", "msg [REQ-FAIL-CLOSED]", "REQ-FAIL-CLOSED")
+            self.assertIn("failed closed", str(ctx.exception).lower())
+
+    def test_send_prompt_verifies_user_turn_hash_after_send(self):
+        """F-008: After send, must verify user turn content hash, not just exists."""
+        with mock.patch.object(self.relay, "check_user_turn_exists") as mock_check, \
+             mock.patch.object(self.relay, "evaluate") as mock_eval:
+            mock_check.side_effect = [
+                {"exists": False, "status": "USER_TURN_NOT_FOUND"},
+                {"exists": True, "status": "OK", "userText": "Wrong content [REQ-HASH-MISMATCH]", "hash_matches": False},
+            ]
+            mock_eval.side_effect = ["OK", "CLICKED"]
+            with self.assertRaises(DeliveryError) as ctx:
+                self.relay.send_prompt("sess-1", "Expected message [REQ-HASH-MISMATCH]", "REQ-HASH-MISMATCH", delivery_timeout=0.01)
+            self.assertIn("hash", str(ctx.exception).lower())
+
+    def test_target_conversation_id_must_match_exactly(self):
+        """F-010: Target conversation ID must match exactly, not just as a prefix."""
+        output = """TAB         SCOPE  WIN         TITLE                       URL
+1587806085  user   1587805881  ChatGPT Review Session      https://chatgpt.com/c/conv-123-extra-malicious
+"""
+        with mock.patch.object(self.relay, "_run_bsk") as mock_bsk:
+            mock_bsk.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout=output, stderr="")
+            # Specifying target tab id with non-matching conversation ID must raise ConversationMismatchError
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.find_target_tab("sess-1", target_tab_id="1587806085", target_url_prefix="https://chatgpt.com/c/conv-123")
+            # Searching by target_url_prefix alone must NOT match the suffix-extended tab
+            with self.assertRaises(TabNotFoundError):
+                self.relay.find_target_tab("sess-1", target_url_prefix="https://chatgpt.com/c/conv-123")
+
+    def test_borrowed_page_must_match_initial_url_even_with_target_tab_id_only(self):
+        """F-010: Even if only target_tab_id is provided, post-borrow URL must match initial URL."""
+        with mock.patch.object(self.relay, "check_status") as mock_status, \
+             mock.patch.object(self.relay, "start_session") as mock_start, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
+             mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "return_tab") as mock_return, \
+             mock.patch.object(self.relay, "stop_session") as mock_stop:
+
+            mock_status.return_value = browser_relay.BrowserStatus(daemon_running=True, connected_browser_id="b-1")
+            mock_start.return_value = "sess-1"
+            mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/conv-1")
+            mock_borrow.return_value = True
+            mock_url.return_value = "https://chatgpt.com/c/conv-2"
+
+            result = self.relay.run_e2e_review("task-1", "msg [REQ-1]", "REQ-1", target_tab_id="tab-1")
+            self.assertEqual(result["status"], "BLOCKED_CONVERSATION_MISMATCH")
+            self.assertIn("navigated", result["error"].lower())
+
+    def test_send_prompt_verifies_url_before_inject_and_send_preventing_toctou(self):
+        """F-010: Re-verify URL in input and click send operations to prevent TOCTOU."""
+        with mock.patch.object(self.relay, "check_user_turn_exists") as mock_check, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url:
+            mock_check.return_value = {"exists": False, "status": "USER_TURN_NOT_FOUND"}
+            mock_url.return_value = "https://chatgpt.com/c/hijacked-conv"
+            with self.assertRaises(ConversationMismatchError):
+                self.relay.send_prompt(
+                    "sess-1", "msg [REQ-TOCTOU]", "REQ-TOCTOU",
+                    expected_url="https://chatgpt.com/c/expected-conv"
+                )
+
+    def test_dom_execution_multi_block_reply_extracts_all_blocks(self):
+        """F-007: Must extract ALL text blocks in assistant reply, not just first querySelector match."""
+        req_id = "REQ-MULTI-BLOCK"
+        dom = {
+            "tag": "main",
+            "children": [
+                {"tag": "article", "attrs": {"data-message-author-role": "user"}, "text": f"Prompt [{req_id}]"},
+                {
+                    "tag": "article",
+                    "attrs": {"data-message-author-role": "assistant"},
+                    "children": [
+                        {"tag": "div", "attrs": {"class": "prose"}, "text": "第1段正文：概述。"},
+                        {"tag": "div", "attrs": {"class": "prose"}, "text": "第2段正文：详细发现。"},
+                    ],
+                },
+            ],
+        }
+        js_extract = build_extract_js(req_id)
+        res = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res["status"], "OK")
+        self.assertIn("第1段正文：概述。", res["text"])
+        self.assertIn("第2段正文：详细发现。", res["text"])
+
+    def test_run_e2e_review_records_diagnostic_when_cleanup_fails(self):
+        """Resource cleanup: return_tab or stop_session returning False must be recorded as error."""
+        with mock.patch.object(self.relay, "check_status") as mock_status, \
+             mock.patch.object(self.relay, "start_session") as mock_start, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
+             mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "send_prompt") as mock_send, \
+             mock.patch.object(self.relay, "wait_for_response") as mock_wait, \
+             mock.patch.object(self.relay, "return_tab") as mock_return, \
+             mock.patch.object(self.relay, "stop_session") as mock_stop:
+
+            mock_status.return_value = browser_relay.BrowserStatus(daemon_running=True, connected_browser_id="b-1")
+            mock_start.return_value = "sess-1"
+            mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/conv-1")
+            mock_borrow.return_value = True
+            mock_url.return_value = "https://chatgpt.com/c/conv-1"
+            mock_send.return_value = True
+            mock_wait.return_value = {"status": "COMPLETE", "text": "All good", "length": 8}
+            mock_return.return_value = False
+            mock_stop.return_value = True
+
+            result = self.relay.run_e2e_review("task-1", "msg [REQ-1]", "REQ-1")
+            self.assertEqual(result["cleanup_status"], "CLEANUP_FAILED")
+            self.assertNotEqual(result["status"], "SUCCESS")
+
 
 if __name__ == "__main__":
     unittest.main()
+

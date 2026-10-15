@@ -15,7 +15,8 @@ from pathlib import Path
 from unittest import mock
 
 
-SKILL_ROOT = Path(__file__).resolve().parents[1] / "skills" / "chatgpt-review"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SKILL_ROOT = PROJECT_ROOT / "skills" / "chatgpt-review"
 SCRIPT = SKILL_ROOT / "scripts" / "relay.py"
 RELAY_SPEC = importlib.util.spec_from_file_location("chatgpt_review_relay", SCRIPT)
 relay = importlib.util.module_from_spec(RELAY_SPEC)
@@ -813,6 +814,79 @@ class RelayCliTests(unittest.TestCase):
             self.assertEqual(old_artifact.read_bytes(), b"keep this artifact")
             self.assertEqual(sorted(path.name for path in artifacts.iterdir()), ["previous.zip"])
 
+    def test_pack_preserves_source_chatgpt_start_sha_and_passes_plugin_check(self):
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project, title="test-task")
+            source_content = (PROJECT_ROOT / "CHATGPT_START.md").read_bytes()
+            (project / "CHATGPT_START.md").write_bytes(source_content)
+            source_sha = hashlib.sha256(source_content).hexdigest()
+
+            result = self.pack(project, 1)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            artifacts = project / "review-artifacts"
+            zips = list(artifacts.glob("*.zip"))
+            self.assertEqual(len(zips), 1)
+            packed_zip = zips[0]
+
+            with zipfile.ZipFile(packed_zip, "r") as archive:
+                names = archive.namelist()
+                self.assertIn("CHATGPT_START.md", names)
+                self.assertIn("CHATGPT_COORDINATION.md", names)
+                packed_content = archive.read("CHATGPT_START.md")
+                packed_sha = hashlib.sha256(packed_content).hexdigest()
+                self.assertEqual(packed_sha, source_sha)
+
+            with tempfile.TemporaryDirectory() as unpack_temp:
+                unpack_dir = Path(unpack_temp)
+                with zipfile.ZipFile(packed_zip, "r") as archive:
+                    archive.extractall(unpack_dir)
+
+                extracted_start = (unpack_dir / "CHATGPT_START.md").read_text(encoding="utf-8")
+                refs = SKILL_ROOT / "references"
+                expected_bootstrap = (
+                    "# chatgpt-review 首次启动\n\n"
+                    "将本文件上传给 ChatGPT，描述你的目标，请它按协调与审查端流程生成任务书。"
+                    "本文由 references/chatgpt.md、github.md 和 contract.md 自动生成。"
+                    "后续上传的审查 ZIP 自带这两份说明。\n\n"
+                    + (refs / "chatgpt.md").read_text(encoding="utf-8")
+                    + "\n\n"
+                    + (refs / "github.md").read_text(encoding="utf-8")
+                    + "\n\n"
+                    + (refs / "contract.md").read_text(encoding="utf-8")
+                )
+                self.assertEqual(extracted_start, expected_bootstrap)
+
+    def test_pack_preserves_both_chatgpt_start_and_coordination_when_both_exist(self):
+        """F-011: When user project already has both CHATGPT_START.md and CHATGPT_COORDINATION.md, neither is overwritten."""
+        with tempfile.TemporaryDirectory() as temp:
+            project = Path(temp)
+            self.start(project, title="test-task")
+            custom_start = b"# User Custom CHATGPT_START.md"
+            custom_coord = b"# User Custom CHATGPT_COORDINATION.md"
+            (project / "CHATGPT_START.md").write_bytes(custom_start)
+            (project / "CHATGPT_COORDINATION.md").write_bytes(custom_coord)
+
+            result = self.pack(project, 1)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            artifacts = project / "review-artifacts"
+            zips = list(artifacts.glob("*.zip"))
+            packed_zip = zips[0]
+
+            with zipfile.ZipFile(packed_zip, "r") as archive:
+                self.assertEqual(archive.read("CHATGPT_START.md"), custom_start)
+                self.assertEqual(archive.read("CHATGPT_COORDINATION.md"), custom_coord)
+                names = archive.namelist()
+                has_alt_coord = any(
+                    name.startswith("CHATGPT_COORDINATION_") or name == "CHATGPT_REVIEW_COORDINATION.md"
+                    for name in names
+                )
+                self.assertTrue(has_alt_coord, f"Expected non-conflicting coordination file in {names}")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

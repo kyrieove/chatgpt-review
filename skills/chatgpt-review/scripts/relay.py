@@ -49,7 +49,7 @@ DENIED_NAME_RE = re.compile(
     r"private-key|private_key|token)(?:[-_.]|$)"
 )
 RESERVED_ROOT_FILES = {
-    "handoff.md", "chatgpt_start.md", "github_review.md", "review_protocol.md",
+    "handoff.md", "github_review.md", "review_protocol.md",
     "package_info.json", "sha256sums.txt",
 }
 SECRET_PATTERNS = tuple(
@@ -855,7 +855,19 @@ def pack_review(args):
         )
         _write_stage_text(stage, "HANDOFF.md", pointer)
         for destination, source in required_references.items():
-            _add_required_source(source, stage, destination)
+            if destination in entries["files"]:
+                base_name = "CHATGPT_COORDINATION"
+                ext = ".md"
+                candidate = f"{base_name}{ext}"
+                suffix = 1
+                while candidate in entries["files"]:
+                    candidate = f"{base_name}_{suffix}{ext}"
+                    suffix += 1
+                _add_required_source(source, stage, candidate)
+                entries["files"].add(candidate)
+            else:
+                _add_required_source(source, stage, destination)
+                entries["files"].add(destination)
 
         package_id = uuid.uuid4().hex
         skipped_paths = sorted(skipped)

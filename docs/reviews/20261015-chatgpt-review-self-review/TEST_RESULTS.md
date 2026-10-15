@@ -1,24 +1,37 @@
-# 第二轮验证结果
+# 测试与验证结果报告（第四轮加固全量报告）
 
 - task_id: 20261015-chatgpt-review-self-review
-- 远端 PR: Draft PR #1 (https://github.com/kyrieove/chatgpt-review/pull/1)
-- 远端 Head SHA: a928ee26776fb82ed80c43df131234c7af2f67c8
-- 基线源码: c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22
-- 当前状态: 第二轮实现与端到端实测全量通过
+- round: 4
+- 远端 PR: [Draft PR #1](https://github.com/kyrieove/chatgpt-review/pull/1)
+- 远端 Head SHA: `c28330334f11f8a72b3020f8d97b5b516fe1f8c6`
+- 本地 HEAD: `c28330334f11f8a72b3020f8d97b5b516fe1f8c6`
+- 基线 Commit SHA: `c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22`
+- 测试汇总: **63 项测试运行完毕，61 项 PASS，2 项 SKIP，0 项 FAIL**。
 
-| 检查项 | 结果 | 证据 / 实际输出 |
-|---|---|---|
-| 全量单元测试 (含 browser_relay) | PASS (37 pass, 2 skip) | `python -B -m unittest discover -s tests -v`：Ran 39 tests in 19.3s; OK (skipped=2, 符号链接受平台权限限制) |
-| browser_relay 独立单元测试 | PASS (8/8 pass) | `test_browser_relay.py` 8 项测试覆盖连接、标签页解析、超时、防重发、交付验证与安全退出清理 |
-| 隔离环境 Antigravity 插件识别 | PASS | `agy plugin validate <isolated_tmp>`：返回退出码 0，输出 `✔ skills: 1 processed`，其他 skipped |
-| 同名 Skill 重复激活风险分析 | ASSESSED | 评估确认：若同名 Skill 与 Plugin 同时存在，Antigravity 会产生双入口或潜在 shadowing，确立 Plugin 为唯一生效源的原则 |
-| browser-relay 真实 E2E 交互 | PASS | 通过 `browser_relay.py relay` 成功连接 Chrome，借用标签页 1587806085，提取完整 ChatGPT 回复并保存，干净归还标签页 |
-| request_id 幂等防重发测试 | PASS | 单元测试验证：当页面已包含指定 request_id 时，`send_prompt` 自动跳过重复提交 |
-| 标签页借用审批超时保护 | PASS | 单元测试与实机验证：借用超时后抛出 `ApprovalRequiredError`，安全退出并清理 session，维持人工转交可用性 |
-| 工作区与拟推送历史凭据扫描 | PASS | 扫描新增文件、diff 与暂存区，未发现未授权私钥或 API Token |
-| 备用审查 ZIP 打包验证 | PASS | 由 `relay.py pack` 输出符合协议规范的 ZIP 文件，包含 SHA256SUMS 与完整元数据 |
+## 详细测试套件分布
 
-## 限制与未验证项
+| 测试模块 | 运行数 | PASS | SKIP | FAIL | 说明 |
+|---|---|---|---|---|---|
+| `tests/test_browser_relay.py` | 31 | 31 | 0 | 0 | 覆盖 F-007 多块提取、F-008 fail-closed 及发送后哈希、F-010 精确会话及 TOCTOU 防护、资源清理诊断 |
+| `tests/test_relay.py` | 30 | 28 | 2 | 0 | 新增 F-011 双文件冲突防覆盖测试；2 项跳过因 Windows 目录软链接受系统权限限制 |
+| `tests/test_plugin.py` | 2 | 2 | 0 | 0 | 根目录 plugin.json 结构与 Skill 引用校验 |
+| **总计** | **63** | **61** | **2** | **0** | **禁止表述为 63 PASS** |
 
-1. **全局环境插件激活**: 依据不修改全局配置的约束，未执行全局 `agy plugin install`，仅在隔离环境验证 manifest 与目录结构。
-2. **第二轮远端推送**: 本地新增的 browser_relay 代码及第二轮任务记录尚未推送到 Draft PR #1，等待用户明确许可。
+## 第四轮新增针对性回归测试表 (8 项先行失败并在修复后通过)
+
+| 场景 | 对应测试方法 | 状态 | 验证逻辑 |
+|---|---|---|---|
+| 1. F-008 发送前检查异常 fail-closed | `test_send_prompt_fails_closed_on_pre_send_parse_error` | PASS | 发送前 DOM 检查返回解析失败或未知状态时，直接抛出 `DeliveryError` 终止，严禁注入 |
+| 2. F-008 发送后验证正文哈希 | `test_send_prompt_verifies_user_turn_hash_after_send` | PASS | 发送后不仅验证 user turn 存在，更核验 DOM 中提取的正文 SHA-256 与发送消息一致 |
+| 3. F-010 目标会话精确匹配 | `test_target_conversation_id_must_match_exactly` | PASS | 精确比对 `/c/<id>`，阻止后缀伪造前缀匹配（如 `/c/conv-123-extra-malicious`） |
+| 4. F-010 Tab ID 借用后 URL 核验 | `test_borrowed_page_must_match_initial_url_even_with_target_tab_id_only` | PASS | 即使只通过 `target_tab_id` 借用，借用后也核验当前 URL 与初次发现的目标一致 |
+| 5. F-010 输入与发送前防 TOCTOU | `test_send_prompt_verifies_url_before_inject_and_send_preventing_toctou` | PASS | 在注入提示词前与点击发送前实时核验 URL，防止异步跳转劫持 |
+| 6. F-007 回复多正文块完整提取 | `test_dom_execution_multi_block_reply_extracts_all_blocks` | PASS | Node.js DOM 夹具实测：提取回复中所有 `.prose, .markdown` 块，多段无缝拼接无截断 |
+| 7. F-011 双文件冲突动态防覆盖 | `test_pack_preserves_both_chatgpt_start_and_coordination_when_both_exist` | PASS | 当项目已有 `CHATGPT_START.md` 与 `CHATGPT_COORDINATION.md` 时自动分配新名字，源码完全保真 |
+| 8. 资源清理失败保留诊断 | `test_run_e2e_review_records_diagnostic_when_cleanup_fails` | PASS | `return_tab` 或 `stop_session` 失败时记录 `CLEANUP_FAILED` 与错误列表，标记状态警告 |
+
+## 限制与未验证项声明
+
+1. **真实浏览器实机发送**: 本轮在 Node.js DOM 夹具和 Mock 隔离环境中执行了真实 DOM JavaScript 与单元测试，**未向真实在线 ChatGPT 会话发送 live prompt**。依据授权边界，真实会话交互须待用户明确指定目标会话并批准测试消息后执行。
+2. **符号链接测试跳过**: `test_evidence_path_rejects_symlink_ancestor_when_available` 等 2 项测试因 Windows 平台无目录符号链接权限而跳过，已在代码中通过 Mock 隔离覆盖。
+3. **远端写入限制**: 本地新增与修改代码未向 GitHub PR #1 推送。
