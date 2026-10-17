@@ -780,7 +780,16 @@ class BrowserRelay:
                 document.querySelector('form button[aria-label="发送"]') ||
                 document.querySelector('button[aria-label="发送"]');
     if (btn && !btn.disabled) {
-        btn.click();
+        if (typeof PointerEvent !== 'undefined' && typeof btn.dispatchEvent === 'function') {
+            const opts = { bubbles: true, cancelable: true, view: window };
+            btn.dispatchEvent(new PointerEvent('pointerdown', opts));
+            btn.dispatchEvent(new MouseEvent('mousedown', opts));
+            btn.dispatchEvent(new PointerEvent('pointerup', opts));
+            btn.dispatchEvent(new MouseEvent('mouseup', opts));
+        }
+        if (typeof btn.click === 'function') {
+            btn.click();
+        }
         return 'CLICKED';
     }
     return 'WAITING_BUTTON';
