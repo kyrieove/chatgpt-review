@@ -778,19 +778,10 @@ class BrowserRelay:
                 document.querySelector('form button[aria-label="发送提示词"]') ||
                 document.querySelector('button[aria-label="发送提示词"]') ||
                 document.querySelector('form button[aria-label="发送"]') ||
-                document.querySelector('button[aria-label="发送"]') ||
-                document.querySelector('form button[type="submit"]');
+                document.querySelector('button[aria-label="发送"]');
     if (btn && !btn.disabled) {
         btn.click();
         return 'CLICKED';
-    }
-    const form = document.querySelector('form');
-    if (form && typeof form.requestSubmit === 'function') {
-        const submitBtn = form.querySelector('button[type="submit"]');
-        if (submitBtn && !submitBtn.disabled) {
-            form.requestSubmit(submitBtn);
-            return 'SUBMITTED';
-        }
     }
     return 'WAITING_BUTTON';
 })()"""
