@@ -532,6 +532,17 @@ def parse_and_validate_review_response(
             pass
 
     if len(candidate_blocks) == 0:
+        # Fallback for DOM-extracted text where code blocks were stripped of markdown backticks
+        raw_json_blocks = re.findall(r"(\{\s*\"task_id\"[\s\S]*?\n\})", response_text)
+        for block in raw_json_blocks:
+            try:
+                data = json.loads(block)
+                if isinstance(data, dict) and "task_id" in data and "decision" in data:
+                    candidate_blocks.append(data)
+            except Exception:
+                pass
+
+    if len(candidate_blocks) == 0:
         return {
             "valid": False,
             "status": "BLOCKED_NO_CONTRACT_BLOCK",
@@ -654,13 +665,13 @@ def parse_and_validate_review_response(
                 "reason": f"Finding at index {idx} must be a dictionary/object.",
                 "data": data,
             }
-        fid = item.get("id")
-        desc = item.get("description") or item.get("summary")
+        fid = item.get("id") or item.get("code")
+        desc = item.get("description") or item.get("summary") or item.get("detail") or item.get("message")
         if not fid or not isinstance(fid, str) or not fid.strip():
             return {
                 "valid": False,
                 "status": "BLOCKED_MALFORMED_FINDING",
-                "reason": f"Finding at index {idx} must have a non-empty 'id' string.",
+                "reason": f"Finding at index {idx} must have a non-empty 'id' or 'code' string.",
                 "data": data,
             }
         if not desc or not isinstance(desc, str) or not desc.strip():
@@ -670,6 +681,8 @@ def parse_and_validate_review_response(
                 "reason": f"Finding '{fid}' must have a non-empty description.",
                 "data": data,
             }
+        item["id"] = fid
+        item["description"] = desc
 
     return {"valid": True, "status": "OK", "reason": "OK", "data": data}
 

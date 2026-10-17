@@ -2160,6 +2160,47 @@ class WorkflowTests(unittest.TestCase):
                 f"Case {idx} populated invalidated_transactions on record_work",
             )
 
+    def test_parse_and_validate_review_response_supports_unfenced_dom_and_finding_codes(self):
+        """Verifies that parse_and_validate_review_response parses unfenced DOM JSON and code/detail fields."""
+        dom_text = """
+ChatGPT 说：
+
+核验 GitHub 提交哈希及 PR 状态完成。
+
+{
+  "task_id": "dom-parse-task",
+  "round": 1,
+  "reviewed_head_sha": "7031e14d853c64d2a7eaad1de71fcba84a2171ae",
+  "decision": "BLOCKED",
+  "findings": [
+    {
+      "severity": "BLOCKER",
+      "code": "REMOTE_SOURCE_UNREADABLE",
+      "detail": "Commit 7031e14d853c64d2a7eaad1de71fcba84a2171ae does not exist on GitHub."
+    }
+  ],
+  "next_action": "Export an offline source ZIP with parent diff and evidence."
+}
+
+进度：GitHub 核验完成；Planning 仍被源码不可访问阻断。
+"""
+        parsed = workflow.parse_and_validate_review_response(
+            response_text=dom_text,
+            expected_task_id="dom-parse-task",
+            expected_round=1,
+            expected_head_sha="7031e14d853c64d2a7eaad1de71fcba84a2171ae",
+            expected_stage=workflow.STAGE_WAITING_PLAN,
+        )
+        self.assertTrue(parsed["valid"])
+        self.assertEqual(parsed["status"], "OK")
+        self.assertEqual(parsed["data"]["decision"], "BLOCKED")
+        self.assertEqual(len(parsed["data"]["findings"]), 1)
+        self.assertEqual(parsed["data"]["findings"][0]["id"], "REMOTE_SOURCE_UNREADABLE")
+        self.assertEqual(
+            parsed["data"]["findings"][0]["description"],
+            "Commit 7031e14d853c64d2a7eaad1de71fcba84a2171ae does not exist on GitHub.",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

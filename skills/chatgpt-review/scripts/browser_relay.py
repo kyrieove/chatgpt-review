@@ -795,6 +795,9 @@ class BrowserRelay:
         if res != "OK":
             raise DeliveryError(f"Could not locate prompt input element on ChatGPT page: {res}")
 
+        # Settle delay for ProseMirror and React DOM state updates
+        time.sleep(0.5)
+
         # TOCTOU prevention: re-verify URL before clicking send
         if expected_url:
             current_url = self.get_current_url(session_id)
@@ -829,9 +832,16 @@ class BrowserRelay:
             btn.dispatchEvent(new MouseEvent('mousedown', opts));
             btn.dispatchEvent(new PointerEvent('pointerup', opts));
             btn.dispatchEvent(new MouseEvent('mouseup', opts));
+            btn.dispatchEvent(new MouseEvent('click', opts));
         }
         if (typeof btn.click === 'function') {
             btn.click();
+        }
+        const form = btn.closest('form');
+        if (form && typeof form.requestSubmit === 'function') {
+            try {
+                form.requestSubmit(btn);
+            } catch (_) {}
         }
         return 'CLICKED';
     }
