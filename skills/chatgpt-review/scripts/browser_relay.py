@@ -248,6 +248,8 @@ def build_extract_js(request_id: str) -> str:
     const isGenerating = Boolean(
         document.querySelector('button[aria-label="Stop generating"]') ||
         document.querySelector('button[aria-label="停止生成"]') ||
+        document.querySelector('button[aria-label="停止流式传输"]') ||
+        document.querySelector('button[aria-label="停止"]') ||
         document.querySelector('button[data-testid="stop-button"]') ||
         document.querySelector('.result-streaming') ||
         main.querySelector('.result-streaming')
@@ -390,11 +392,15 @@ def build_extract_js(request_id: str) -> str:
             allTexts.push((clone.innerText || clone.textContent || '').trim());
         }}
     }}
+    const anyHasCopy = assistantTurns.some(t => Boolean(
+        t.node.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"]')
+    ));
     const extractedText = allTexts.filter(Boolean).join('\\n\\n');
 
     return JSON.stringify({{
         status: isGenerating ? 'GENERATING' : 'OK',
         isGenerating: isGenerating,
+        hasCopyButton: anyHasCopy,
         textLength: extractedText.length,
         text: extractedText
     }});
@@ -832,16 +838,17 @@ class BrowserRelay:
             btn.dispatchEvent(new MouseEvent('mousedown', opts));
             btn.dispatchEvent(new PointerEvent('pointerup', opts));
             btn.dispatchEvent(new MouseEvent('mouseup', opts));
-            btn.dispatchEvent(new MouseEvent('click', opts));
         }
         if (typeof btn.click === 'function') {
             btn.click();
         }
-        const form = btn.closest('form');
-        if (form && typeof form.requestSubmit === 'function') {
-            try {
-                form.requestSubmit(btn);
-            } catch (_) {}
+        const composerEl = document.querySelector('form div[contenteditable="true"]') ||
+                           document.querySelector('form textarea') ||
+                           document.querySelector('#prompt-textarea') ||
+                           document.activeElement;
+        if (composerEl) {
+            composerEl.focus();
+            composerEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         }
         return 'CLICKED';
     }
@@ -920,9 +927,12 @@ class BrowserRelay:
 
             if not is_generating:
                 if current_length > 0:
+                    has_copy = extract.get("hasCopyButton", False)
+                    has_contract = ('"decision"' in text) or ("chatgpt-review" in text)
+                    min_stable = 2 if (has_copy or has_contract) else 4
                     if current_length == last_length:
                         stable_count += 1
-                        if stable_count >= 2:
+                        if stable_count >= min_stable:
                             return {
                                 "status": "COMPLETE",
                                 "text": text,
