@@ -771,18 +771,10 @@ class BrowserRelay:
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }} else {{
         el.focus();
-        if (typeof window.getSelection === 'function' && typeof document.createRange === 'function') {{
-            const sel = window.getSelection();
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            sel.removeAllRanges();
-            sel.addRange(range);
-        }}
-        let inserted = false;
         if (typeof document.execCommand === 'function') {{
-            inserted = document.execCommand('insertText', false, {encoded_msg});
-        }}
-        if (!inserted || (el.innerText || '').trim().length === 0) {{
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, {encoded_msg});
+        }} else {{
             el.innerText = {encoded_msg};
         }}
         if (typeof InputEvent !== 'undefined') {{
@@ -842,14 +834,6 @@ class BrowserRelay:
         if (typeof btn.click === 'function') {
             btn.click();
         }
-        const composerEl = document.querySelector('form div[contenteditable="true"]') ||
-                           document.querySelector('form textarea') ||
-                           document.querySelector('#prompt-textarea') ||
-                           document.activeElement;
-        if (composerEl) {
-            composerEl.focus();
-            composerEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        }
         return 'CLICKED';
     }
     return 'WAITING_BUTTON';
@@ -863,7 +847,20 @@ class BrowserRelay:
             time.sleep(0.3)
 
         if send_res not in ("CLICKED", "SUBMITTED"):
-            raise DeliveryError(f"Failed to trigger send action: send button not clickable ({send_res})")
+            fallback_js = """(() => {
+    const el = document.querySelector('form [contenteditable="true"]') ||
+               document.querySelector('#prompt-textarea') ||
+               document.activeElement;
+    if (el) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+        return 'ENTER_SENT';
+    }
+    return 'NO_SEND_ACTION';
+})()"""
+            send_res = self.evaluate(session_id, fallback_js)
+
+        if send_res not in ("CLICKED", "SUBMITTED", "ENTER_SENT"):
+            raise DeliveryError(f"Failed to trigger send action: {send_res}")
 
         # Verify delivery into formal user turn within delivery_timeout seconds with content hash verification
         start = time.time()
