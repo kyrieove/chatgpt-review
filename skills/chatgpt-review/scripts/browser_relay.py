@@ -765,10 +765,18 @@ class BrowserRelay:
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }} else {{
         el.focus();
+        if (typeof window.getSelection === 'function' && typeof document.createRange === 'function') {{
+            const sel = window.getSelection();
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }}
+        let inserted = false;
         if (typeof document.execCommand === 'function') {{
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, {encoded_msg});
-        }} else {{
+            inserted = document.execCommand('insertText', false, {encoded_msg});
+        }}
+        if (!inserted || (el.innerText || '').trim().length === 0) {{
             el.innerText = {encoded_msg};
         }}
         if (typeof InputEvent !== 'undefined') {{
@@ -777,6 +785,9 @@ class BrowserRelay:
             el.dispatchEvent(new Event('input', {{ bubbles: true }}));
         }}
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+    }}
+    if ((el.innerText || el.value || '').trim().length === 0) {{
+        return 'INJECT_EMPTY';
     }}
     return 'OK';
 }})()"""
@@ -828,27 +839,14 @@ class BrowserRelay:
 })()"""
         send_res = "NO_SEND_ACTION"
         click_start = time.time()
-        while time.time() - click_start < 4.0:
+        while time.time() - click_start < 6.0:
             send_res = self.evaluate(session_id, click_js)
             if send_res in ("CLICKED", "SUBMITTED"):
                 break
             time.sleep(0.3)
 
         if send_res not in ("CLICKED", "SUBMITTED"):
-            fallback_js = """(() => {
-    const el = document.querySelector('form [contenteditable="true"]') ||
-               document.querySelector('#prompt-textarea') ||
-               document.activeElement;
-    if (el) {
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-        return 'ENTER_SENT';
-    }
-    return 'NO_SEND_ACTION';
-})()"""
-            send_res = self.evaluate(session_id, fallback_js)
-
-        if send_res not in ("CLICKED", "SUBMITTED", "ENTER_SENT"):
-            raise DeliveryError(f"Failed to trigger send action: {send_res}")
+            raise DeliveryError(f"Failed to trigger send action: send button not clickable ({send_res})")
 
         # Verify delivery into formal user turn within delivery_timeout seconds with content hash verification
         start = time.time()
