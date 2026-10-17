@@ -211,7 +211,14 @@ def build_check_user_turn_js(request_id: str) -> str:
     const matchedUserTurns = [];
     for (const t of turns) {{
         if (t.role === 'user') {{
-            const txt = (t.node.innerText || t.node.textContent || '');
+            const targetEl = t.node.querySelector('[data-markdown-text-tone="user-message"]') ||
+                             t.node.querySelector('.rich-text-user-turn') ||
+                             t.node.querySelector('[class*="user-message"]') ||
+                             t.node;
+            const clone = targetEl.cloneNode(true);
+            const toRemove = clone.querySelectorAll('button, svg, [data-testid*="edit"], [aria-label*="Edit"], [aria-label*="编辑"]');
+            toRemove.forEach(b => b.remove());
+            const txt = (clone.innerText || clone.textContent || '').trim();
             if (txt.includes({escaped_req})) {{
                 matchedUserTurns.push({{ text: txt }});
             }}
@@ -643,7 +650,11 @@ class BrowserRelay:
         return res.strip("\"'")
 
     def check_user_turn_exists(
-        self, session_id: str, request_id: str, expected_message_hash: Optional[str] = None
+        self,
+        session_id: str,
+        request_id: str,
+        expected_message_hash: Optional[str] = None,
+        expected_message: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Checks whether a genuine user turn containing request_id exists in the active conversation."""
         js = build_check_user_turn_js(request_id)
@@ -653,11 +664,23 @@ class BrowserRelay:
         except Exception:
             return {"exists": False, "status": "EVALUATE_PARSE_ERROR", "raw": res}
 
-        if data.get("exists") and expected_message_hash:
+        if data.get("exists") and (expected_message_hash or expected_message):
             user_text = data.get("userText", "")
             user_hash = hashlib.sha256(user_text.strip().encode("utf-8")).hexdigest()
             data["user_text_hash"] = user_hash
-            data["hash_matches"] = (user_hash == expected_message_hash)
+            if expected_message_hash and user_hash == expected_message_hash:
+                data["hash_matches"] = True
+            elif expected_message:
+                norm_user = "".join(user_text.split())
+                norm_exp = "".join(expected_message.split())
+                if norm_user == norm_exp and len(norm_exp) > 0:
+                    data["hash_matches"] = True
+                    if expected_message_hash:
+                        data["user_text_hash"] = expected_message_hash
+                else:
+                    data["hash_matches"] = False
+            else:
+                data["hash_matches"] = False
         return data
 
     def send_prompt(
@@ -682,7 +705,9 @@ class BrowserRelay:
             raise ValueError(f"Message content must explicitly contain request_id: {request_id}")
 
         expected_hash = expected_message_hash or hashlib.sha256(message.strip().encode("utf-8")).hexdigest()
-        check = self.check_user_turn_exists(session_id, request_id, expected_message_hash=expected_hash)
+        check = self.check_user_turn_exists(
+            session_id, request_id, expected_message_hash=expected_hash, expected_message=message
+        )
         status = check.get("status")
 
         # Pre-send DOM check must fail-closed on any error/unexpected status
@@ -693,7 +718,7 @@ class BrowserRelay:
 
         if check.get("exists"):
             # Check for idempotency content collision
-            if check.get("user_text_hash") and check.get("user_text_hash") != expected_hash:
+            if check.get("user_text_hash") and not check.get("hash_matches"):
                 raise DeliveryError(
                     f"Idempotency conflict: user turn with request_id={request_id} exists but content hash does not match current message."
                 )
@@ -821,7 +846,9 @@ class BrowserRelay:
         # Verify delivery into formal user turn within delivery_timeout seconds with content hash verification
         start = time.time()
         while time.time() - start < delivery_timeout:
-            check_after = self.check_user_turn_exists(session_id, request_id, expected_message_hash=expected_hash)
+            check_after = self.check_user_turn_exists(
+                session_id, request_id, expected_message_hash=expected_hash, expected_message=message
+            )
             if check_after.get("exists"):
                 if expected_hash and not check_after.get("hash_matches"):
                     raise DeliveryError(
@@ -1097,10 +1124,17 @@ class BrowserRelay:
             journal_entry["verified_thinking"] = m_check.get("thinking_mode")
 
             if skip_send:
-                user_turn_info = self.verify_user_turn_exists(session_id, request_id)
+                user_turn_info = self.check_user_turn_exists(
+                    session_id, request_id, expected_message_hash=msg_hash, expected_message=message
+                )
                 if not user_turn_info.get("exists"):
                     journal_entry["status"] = "BLOCKED_DELIVERY_UNCONFIRMED"
                     journal_entry["error"] = f"Recovery check failed: user turn '{request_id}' not found in DOM ({user_turn_info.get('status')})"
+                    journal_entry["manual_fallback_required"] = True
+                    return journal_entry
+                if msg_hash and not user_turn_info.get("hash_matches"):
+                    journal_entry["status"] = "BLOCKED_DELIVERY_UNCONFIRMED"
+                    journal_entry["error"] = f"Recovery check failed: user turn '{request_id}' content hash mismatch"
                     journal_entry["manual_fallback_required"] = True
                     return journal_entry
                 journal_entry["delivery_status"] = "CONFIRMED_USER_TURN"

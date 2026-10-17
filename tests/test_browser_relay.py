@@ -1,3 +1,4 @@
+import hashlib
 import importlib.util
 import json
 import subprocess
@@ -480,6 +481,30 @@ class BrowserRelayTests(unittest.TestCase):
             with self.assertRaises(DeliveryError) as ctx:
                 self.relay.send_prompt("sess-1", "Expected message [REQ-HASH-MISMATCH]", "REQ-HASH-MISMATCH", delivery_timeout=0.01)
             self.assertIn("hash", str(ctx.exception).lower())
+
+    def test_check_user_turn_exists_matches_with_whitespace_normalization(self):
+        """F-008: Rendered DOM text with paragraph newlines matches raw message via normalization."""
+        raw_msg = "# Title [REQ-NORM-1]\n\n- Item 1: `foo`\n- Item 2: `bar`"
+        dom_rendered_text = "# Title [REQ-NORM-1]\n\n\n\n\n- Item 1: `foo`\n\n- Item 2: `bar`\n"
+        with mock.patch.object(self.relay, "evaluate") as mock_eval:
+            mock_eval.return_value = json.dumps({"exists": True, "status": "OK", "userText": dom_rendered_text})
+            res = self.relay.check_user_turn_exists(
+                "sess-1", "REQ-NORM-1",
+                expected_message_hash=hashlib.sha256(raw_msg.encode("utf-8")).hexdigest(),
+                expected_message=raw_msg,
+            )
+            self.assertTrue(res["exists"])
+            self.assertTrue(res["hash_matches"])
+            self.assertEqual(res["user_text_hash"], hashlib.sha256(raw_msg.encode("utf-8")).hexdigest())
+
+            # Negative test: content difference fails closed
+            diff_msg = "# Title [REQ-NORM-1]\n\n- Item 1: `DIFFERENT`\n- Item 2: `bar`"
+            res_diff = self.relay.check_user_turn_exists(
+                "sess-1", "REQ-NORM-1",
+                expected_message_hash=hashlib.sha256(diff_msg.encode("utf-8")).hexdigest(),
+                expected_message=diff_msg,
+            )
+            self.assertFalse(res_diff["hash_matches"])
 
     def test_target_conversation_id_must_match_exactly(self):
         """F-010: Target conversation ID must match exactly, not just as a prefix."""
