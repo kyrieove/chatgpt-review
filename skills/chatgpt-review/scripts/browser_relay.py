@@ -720,7 +720,10 @@ class BrowserRelay:
 
         encoded_msg = json.dumps(message)
         inject_js = f"""(() => {{
-    const el = document.querySelector('#prompt-textarea') ||
+    const el = document.querySelector('form #prompt-textarea') ||
+               document.querySelector('#prompt-textarea') ||
+               document.querySelector('form div[contenteditable="true"]') ||
+               document.querySelector('form textarea') ||
                document.querySelector('div[contenteditable="true"]') ||
                document.querySelector('textarea');
     if (!el) return 'NO_INPUT';
@@ -730,8 +733,18 @@ class BrowserRelay:
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }} else {{
         el.focus();
-        el.innerText = {encoded_msg};
-        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        if (typeof document.execCommand === 'function') {{
+            document.execCommand('selectAll', false, null);
+            document.execCommand('insertText', false, {encoded_msg});
+        }} else {{
+            el.innerText = {encoded_msg};
+        }}
+        if (typeof InputEvent !== 'undefined') {{
+            el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: {encoded_msg} }}));
+        }} else {{
+            el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        }}
+        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }}
     return 'OK';
 }})()"""
@@ -758,14 +771,21 @@ class BrowserRelay:
                 )
 
         click_js = """(() => {
-    const btn = document.querySelector('button[data-testid="send-button"]') ||
+    const btn = document.querySelector('form button[data-testid="send-button"]') ||
+                document.querySelector('button[data-testid="send-button"]') ||
+                document.querySelector('form button[aria-label="Send prompt"]') ||
                 document.querySelector('button[aria-label="Send prompt"]') ||
-                document.querySelector('button[aria-label="发送提示词"]');
+                document.querySelector('form button[aria-label="发送提示词"]') ||
+                document.querySelector('button[aria-label="发送提示词"]') ||
+                document.querySelector('form button[aria-label="发送"]') ||
+                document.querySelector('button[aria-label="发送"]');
     if (btn && !btn.disabled) {
         btn.click();
         return 'CLICKED';
     }
-    const el = document.querySelector('#prompt-textarea') || document.activeElement;
+    const el = document.querySelector('form [contenteditable="true"]') ||
+               document.querySelector('#prompt-textarea') ||
+               document.activeElement;
     if (el) {
         el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
         return 'ENTER_SENT';
