@@ -351,9 +351,16 @@ def build_extract_js(request_id: str) -> str:
     }}
 
     const userIndex = matchedUserTurns[0].index;
-    const nextIndex = userIndex + 1;
+    const assistantTurns = [];
+    for (let j = userIndex + 1; j < turns.length; j++) {{
+        if (turns[j].role === 'assistant') {{
+            assistantTurns.push(turns[j]);
+        }} else {{
+            break;
+        }}
+    }}
 
-    if (nextIndex >= turns.length) {{
+    if (assistantTurns.length === 0) {{
         return JSON.stringify({{
             status: 'WAITING_FOR_ASSISTANT',
             isGenerating: isGenerating,
@@ -361,29 +368,29 @@ def build_extract_js(request_id: str) -> str:
         }});
     }}
 
-    const nextTurn = turns[nextIndex];
-    if (nextTurn.role !== 'assistant') {{
-        return JSON.stringify({{
-            status: 'BLOCKED_INVALID_SEQUENCE',
-            isGenerating: isGenerating,
-            text: '',
-            reason: 'Turn following user turn is not role assistant'
-        }});
+    let targetTurns = assistantTurns.filter(t => {{
+        const hasCopy = Boolean(t.node.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"]'));
+        const isPureThinking = !hasCopy && /^(思考|thinking)/i.test((t.node.innerText || '').trim());
+        return !isPureThinking;
+    }});
+    if (targetTurns.length === 0) {{
+        targetTurns = assistantTurns;
     }}
 
-    // Clone assistant turn node and clean button bars, SVGs, controls
-    const clone = nextTurn.node.cloneNode(true);
-    const toRemove = clone.querySelectorAll('button, svg, [data-testid*="action"], [aria-label*="Copy"], [aria-label*="复制"], [aria-label*="Feedback"]');
-    toRemove.forEach(b => b.remove());
+    let allTexts = [];
+    for (const targetTurn of targetTurns) {{
+        const clone = targetTurn.node.cloneNode(true);
+        const toRemove = clone.querySelectorAll('button, svg, [data-testid*="action"], [aria-label*="Copy"], [aria-label*="复制"], [aria-label*="Feedback"]');
+        toRemove.forEach(b => b.remove());
 
-    // Extract ALL prose/markdown blocks, joining them with double newline
-    const proseBlocks = Array.from(clone.querySelectorAll('.prose, .markdown, [class*="MarkdownRoot"]'));
-    let extractedText = '';
-    if (proseBlocks.length > 0) {{
-        extractedText = proseBlocks.map(b => (b.innerText || b.textContent || '').trim()).filter(Boolean).join('\\n\\n');
-    }} else {{
-        extractedText = (clone.innerText || clone.textContent || '').trim();
+        const proseBlocks = Array.from(clone.querySelectorAll('.prose, .markdown, [class*="MarkdownRoot"]'));
+        if (proseBlocks.length > 0) {{
+            allTexts.push(proseBlocks.map(b => (b.innerText || b.textContent || '').trim()).filter(Boolean).join('\\n\\n'));
+        }} else {{
+            allTexts.push((clone.innerText || clone.textContent || '').trim());
+        }}
     }}
+    const extractedText = allTexts.filter(Boolean).join('\\n\\n');
 
     return JSON.stringify({{
         status: isGenerating ? 'GENERATING' : 'OK',
