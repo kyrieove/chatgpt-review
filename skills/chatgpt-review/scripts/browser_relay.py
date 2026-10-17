@@ -665,7 +665,7 @@ class BrowserRelay:
         session_id: str,
         message: str,
         request_id: str,
-        delivery_timeout: float = 12.0,
+        delivery_timeout: float = 30.0,
         expected_message_hash: Optional[str] = None,
         expected_url: Optional[str] = None,
         expected_model: Optional[str] = None,
@@ -778,11 +778,32 @@ class BrowserRelay:
                 document.querySelector('form button[aria-label="发送提示词"]') ||
                 document.querySelector('button[aria-label="发送提示词"]') ||
                 document.querySelector('form button[aria-label="发送"]') ||
-                document.querySelector('button[aria-label="发送"]');
+                document.querySelector('button[aria-label="发送"]') ||
+                document.querySelector('form button[type="submit"]');
     if (btn && !btn.disabled) {
         btn.click();
         return 'CLICKED';
     }
+    const form = document.querySelector('form');
+    if (form && typeof form.requestSubmit === 'function') {
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn && !submitBtn.disabled) {
+            form.requestSubmit(submitBtn);
+            return 'SUBMITTED';
+        }
+    }
+    return 'WAITING_BUTTON';
+})()"""
+        send_res = "NO_SEND_ACTION"
+        click_start = time.time()
+        while time.time() - click_start < 4.0:
+            send_res = self.evaluate(session_id, click_js)
+            if send_res in ("CLICKED", "SUBMITTED"):
+                break
+            time.sleep(0.3)
+
+        if send_res not in ("CLICKED", "SUBMITTED"):
+            fallback_js = """(() => {
     const el = document.querySelector('form [contenteditable="true"]') ||
                document.querySelector('#prompt-textarea') ||
                document.activeElement;
@@ -792,8 +813,9 @@ class BrowserRelay:
     }
     return 'NO_SEND_ACTION';
 })()"""
-        send_res = self.evaluate(session_id, click_js)
-        if send_res not in ("CLICKED", "ENTER_SENT"):
+            send_res = self.evaluate(session_id, fallback_js)
+
+        if send_res not in ("CLICKED", "SUBMITTED", "ENTER_SENT"):
             raise DeliveryError(f"Failed to trigger send action: {send_res}")
 
         # Verify delivery into formal user turn within delivery_timeout seconds with content hash verification
