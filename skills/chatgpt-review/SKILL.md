@@ -41,14 +41,24 @@ ChatGPT 输出可直接转交的任务书或反馈；执行端默认返回同一
 
 ## 本地工具与模板
 
-可选工具使用 Python 3.9+ 标准库，在执行端运行：
+Antigravity 推荐默认使用单端自动流程 CLI（详见 [持久工作流流程](references/workflow.md)）：
+
+```text
+python "<skill>/scripts/workflow.py" start --project "<project>" --title "<task title>"
+python "<skill>/scripts/workflow.py" exchange --project "<project>" --chat-url "<chat-url>"
+python "<skill>/scripts/workflow.py" record-work --project "<project>" --head-sha "<commit-sha>" --test-evidence "<test results>"
+python "<skill>/scripts/workflow.py" status --project "<project>"
+python "<skill>/scripts/workflow.py" resume --project "<project>"
+```
+
+其他 Agent（Codex、Claude Code 等）或手工/离线打包备用模式继续使用 `relay.py`：
 
 ```text
 python "<skill>/scripts/relay.py" start --project "<project>" --title "<task title>"
 python "<skill>/scripts/relay.py" pack --project "<project>" --round 1
 ```
 
-首轮包含新建任务目录，不自动填写需求、执行测试、推送、创建 PR 或发送 ZIP。此 CLI 只初始化本地记录和打包，GitHub 流程由当前执行 Agent 的真实工具承担。调用前读取执行端流程。没有 Python 时，用可用工具实现相同记录与备用包契约。
+首轮包含新建任务目录，不自动填写需求、执行测试、推送、创建 PR 或发送 ZIP。CLI 只管理本地状态与受控通信，禁止自动执行网页任意命令。Antigravity 自身承担代码实现、真实测试并提供证据，正常阶段自动推进，需要用户回答的问题只在 Antigravity 展示。调用前读取执行端流程。没有 Python 时，用可用工具实现相同记录与备用包契约。
 
 协调端已经确定新任务 ID 时，start 添加 --task-id <id>，已有任务则读取记录续接，不重新初始化。显式 --include 单个文件被过滤、超限或无法读取时打包失败；选择目录时允许安全过滤子项，但报告所有排除项。
 

@@ -19,6 +19,29 @@
 
 skill 不建立 GitHub 连接，也不提供自动聊天传输。连接器可读内容和版本需要实际核对。ChatGPT 不能查看本地未推送文件；读不到目标 SHA、PR 或日志时补充固定版本材料或备用 ZIP。
 
+## Antigravity 单端自动工作流
+
+针对在 Antigravity 环境提需求的用户，提供端到端自动工作流（`skills/chatgpt-review/scripts/workflow.py`，详见 [持久工作流流程](skills/chatgpt-review/references/workflow.md)）：
+
+1. **零复制粘贴**：用户在 Antigravity 提需求，真实 ChatGPT 负责规划与验收；Antigravity 负责本地修改、测试执行与凭据检查，自动流转。
+2. **状态与版本闭环**：通过 `workflow.py` 严格推进（待计划 -> 待执行 -> 待审查 -> 待修复或诊断 -> 待验收完成），强绑定真实 40 位 Git HEAD commit SHA 与非空测试结果证据。
+3. **已登录 Chrome 自动化往返**：复用 `BrowserRelay`，自动校验 HTTPS ChatGPT 域名与对话 ID，核验实际选定的模型（如 GPT-4o、o1）及思考模式，防 TOCTOU 重定向，确认 DOM user turn 回执后等待完整回复。
+4. **防御性异常处理**：连续两轮修复无改善自动转诊断；累计超过 5 轮修复自动暂停等待用户人工介入。
+
+```text
+# 1. 初始化任务
+python skills/chatgpt-review/scripts/workflow.py start --project . --title "<需求标题>" --model gpt-4o
+
+# 2. 发起计划/审查往返（校验模型并借用 Chrome 标签页交互）
+python skills/chatgpt-review/scripts/workflow.py exchange --project . --chat-url "<chatgpt-conversation-url>"
+
+# 3. 本地实现与测试后记录真实工作（绑定 Git HEAD 与测试证据）
+python skills/chatgpt-review/scripts/workflow.py record-work --project . --head-sha "<commit-sha>" --test-evidence "<test-results>"
+
+# 4. 换聊天续接与重启恢复
+python skills/chatgpt-review/scripts/workflow.py resume --project . --chat-url "<new-chat-url>"
+```
+
 ## Antigravity Plugin 与独立 Skill
 
 仓库根目录的 plugin.json 直接复用 skills/chatgpt-review，不复制另一套协议。可按 Antigravity 支持的方式从本地目录或 GitHub 安装；其他 Agent 继续读取原 skill 目录。当前提供最小插件包装，不加入 MCP、hooks 或额外运行依赖。

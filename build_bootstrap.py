@@ -18,7 +18,8 @@ def main():
         + (refs / "contract.md").read_text(encoding="utf-8")
     )
     target = root / "CHATGPT_START.md"
-    target.write_text(content, encoding="utf-8")
+    with target.open("w", encoding="utf-8", newline="\n") as stream:
+        stream.write(content)
     print(f"CHATGPT_START={target}")
 
 

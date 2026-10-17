@@ -73,8 +73,25 @@ def validate_chatgpt_origin(url: Optional[str]) -> bool:
     return True
 
 
+def normalize_model_identifier(name: Optional[str]) -> str:
+    """Normalizes model identifier: lowercase, trims whitespace, preserving all model variants and suffixes."""
+    if not name:
+        return ""
+    norm = " ".join(name.strip().lower().split())
+    aliases = {
+        "高": "high",
+        "中": "medium",
+        "低": "low",
+    }
+    return aliases.get(norm, norm)
+
+
+
 def match_conversation_url(target_url: str, candidate_url: str) -> bool:
-    """Matches target and candidate URLs. If target specifies a conversation (/c/<id>), matches exact conversation ID."""
+    """Matches target and candidate URLs.
+    - If target specifies a conversation (/c/<id>), candidate must match exact conversation ID.
+    - If target is fresh chat (https://chatgpt.com/ or https://chatgpt.com), candidate can be fresh chat or transition to a valid new conversation (/c/<id>).
+    """
     if not target_url or not candidate_url:
         return False
     if not validate_chatgpt_origin(target_url) or not validate_chatgpt_origin(candidate_url):
@@ -93,15 +110,29 @@ def match_conversation_url(target_url: str, candidate_url: str) -> bool:
     t_path = t_parsed.path.rstrip("/")
     c_path = c_parsed.path.rstrip("/")
 
-    # Check if target specifies a conversation path /c/<id>
-    t_parts = t_path.split("/")
+    t_parts = [p for p in t_path.split("/") if p]
+    c_parts = [p for p in c_path.split("/") if p]
+
+    # Target specifies /c/<id>
     if "c" in t_parts:
         c_idx = t_parts.index("c")
         if c_idx + 1 < len(t_parts):
-            # Target specifies a concrete conversation ID: must match exactly!
-            return t_path.lower() == c_path.lower()
+            # Target has specific conversation ID: candidate must match exact conversation ID!
+            if "c" in c_parts:
+                candidate_c_idx = c_parts.index("c")
+                if candidate_c_idx + 1 < len(c_parts):
+                    return t_parts[c_idx + 1].lower() == c_parts[candidate_c_idx + 1].lower()
+            return False
 
-    # Otherwise path prefix match
+    # Target is fresh chat root (path is "" or "/")
+    if not t_parts:
+        if not c_parts:
+            return True
+        if "c" in c_parts:
+            # Transition to /c/<id> is legitimate
+            return True
+        return False
+
     return c_path.lower().startswith(t_path.lower())
 
 
@@ -312,6 +343,58 @@ def build_extract_js(request_id: str) -> str:
         text: extractedText
     }});
 }})()"""
+
+
+def build_check_model_and_thinking_js() -> str:
+    """Constructs DOM JavaScript to detect the currently active model and thinking mode."""
+    return """(() => {
+    let modelName = '';
+    const modelBtn = document.querySelector('button[data-testid="model-switcher-dropdown-button"]') ||
+                     document.querySelector('button[id^="model-selector"]') ||
+                     document.querySelector('[data-testid*="model-selector"]');
+    if (modelBtn) {
+        modelName = (modelBtn.innerText || modelBtn.textContent || '').trim();
+    }
+    if (!modelName) {
+        const modeBtn = document.querySelector('button[aria-label*="当前模式"], button[aria-label*="Current mode"]');
+        if (modeBtn) {
+            modelName = (modeBtn.innerText || modeBtn.textContent || '').trim();
+        }
+    }
+    if (!modelName) {
+        const headerEl = document.querySelector('header');
+        if (headerEl) {
+            const m = headerEl.querySelector('button[aria-haspopup="menu"]');
+            if (m) modelName = (m.innerText || m.textContent || '').trim();
+        }
+    }
+
+    let thinkingMode = '';
+    const thinkingBtn = document.querySelector('button[data-testid*="reasoning"]') ||
+                        document.querySelector('[data-testid*="thought"]') ||
+                        document.querySelector('button[aria-label*="Thinking"]') ||
+                        document.querySelector('button[aria-label*="思考"]');
+    if (thinkingBtn) {
+        thinkingMode = (thinkingBtn.innerText || thinkingBtn.textContent || '').trim();
+    }
+    if (!thinkingMode) {
+        const composerPills = Array.from(document.querySelectorAll('button[aria-label*="选择 ChatGPT 模型"], button[aria-label*="Select model"], button[aria-label*="Reasoning effort"]'));
+        for (const p of composerPills) {
+            const txt = (p.innerText || p.textContent || '').trim();
+            if (/^(high|medium|low|高|中|低)$/i.test(txt)) {
+                thinkingMode = txt;
+                break;
+            }
+        }
+    }
+
+    return JSON.stringify({
+        model: modelName,
+        thinking_mode: thinkingMode,
+        detected: Boolean(modelName)
+    });
+})()"""
+
 
 
 @dataclass
@@ -543,12 +626,14 @@ class BrowserRelay:
         delivery_timeout: float = 12.0,
         expected_message_hash: Optional[str] = None,
         expected_url: Optional[str] = None,
+        expected_model: Optional[str] = None,
+        expected_thinking: Optional[str] = None,
     ) -> bool:
         """Injects prompt and triggers send. Verifies arrival as a formal user turn.
 
         Enforces:
         1. Pre-send DOM check fail-closed on any error or unexpected status.
-        2. TOCTOU prevention: URL checked immediately before inject and before send.
+        2. TOCTOU prevention: URL and model/thinking checked immediately before inject and before send.
         3. Post-send user turn SHA-256 verification (not just exists).
         """
         if request_id not in message:
@@ -581,6 +666,16 @@ class BrowserRelay:
                     f"TOCTOU violation: URL changed before prompt injection from '{expected_url}' to '{current_url}'"
                 )
 
+        # TOCTOU prevention: re-verify model and thinking mode before injection
+        if expected_model or expected_thinking:
+            m_check = self.check_model_and_thinking(
+                session_id, expected_model=expected_model, expected_thinking=expected_thinking
+            )
+            if not m_check.get("verified"):
+                raise ConversationMismatchError(
+                    f"TOCTOU violation: Model or thinking mode mismatch before injection: {m_check.get('reason')}"
+                )
+
         encoded_msg = json.dumps(message)
         inject_js = f"""(() => {{
     const el = document.querySelector('#prompt-textarea') ||
@@ -608,6 +703,16 @@ class BrowserRelay:
             if not match_conversation_url(expected_url, current_url):
                 raise ConversationMismatchError(
                     f"TOCTOU violation: URL changed before clicking send from '{expected_url}' to '{current_url}'"
+                )
+
+        # TOCTOU prevention: re-verify model and thinking mode before clicking send
+        if expected_model or expected_thinking:
+            m_check = self.check_model_and_thinking(
+                session_id, expected_model=expected_model, expected_thinking=expected_thinking
+            )
+            if not m_check.get("verified"):
+                raise ConversationMismatchError(
+                    f"TOCTOU violation: Model or thinking mode mismatch before send: {m_check.get('reason')}"
                 )
 
         click_js = """(() => {
@@ -714,6 +819,95 @@ class BrowserRelay:
             "diagnostic": last_extract,
         }
 
+    def check_model_and_thinking(
+        self,
+        session_id: str,
+        expected_model: Optional[str] = None,
+        expected_thinking: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Inspects and validates active model and thinking mode against expected configuration."""
+        js = build_check_model_and_thinking_js()
+        raw = self.evaluate(session_id, js)
+        try:
+            data = json.loads(raw)
+        except Exception as exc:
+            return {
+                "verified": False,
+                "status": "BLOCKED_MODEL_UNKNOWN",
+                "reason": f"Could not parse model check output: {exc}",
+                "raw": raw,
+            }
+
+        detected_model = (data.get("model") or "").strip()
+        detected_thinking = (data.get("thinking_mode") or "").strip()
+
+        if not detected_model:
+            return {
+                "verified": False,
+                "status": "BLOCKED_MODEL_UNKNOWN",
+                "reason": f"Could not detect active model from ChatGPT interface (expected '{expected_model or 'any'}')",
+                "detected_model": detected_model,
+                "detected_thinking": detected_thinking,
+            }
+
+        if not detected_thinking or detected_thinking.lower() in ("enabled", "thinking"):
+            return {
+                "verified": False,
+                "status": "BLOCKED_THINKING_MODE_UNKNOWN",
+                "reason": f"Concrete thinking mode not detected in DOM (got '{detected_thinking or 'empty'}', expected '{expected_thinking or 'concrete mode'}')",
+                "detected_model": detected_model,
+                "detected_thinking": detected_thinking,
+            }
+
+        if expected_model:
+            exp_m = normalize_model_identifier(expected_model)
+            det_m = normalize_model_identifier(detected_model)
+            if exp_m != det_m:
+                return {
+                    "verified": False,
+                    "status": "BLOCKED_MODEL_MISMATCH",
+                    "reason": f"Expected model '{expected_model}', but detected '{detected_model}'",
+                    "detected_model": detected_model,
+                    "detected_thinking": detected_thinking,
+                }
+
+        if expected_thinking:
+            exp_t = normalize_model_identifier(expected_thinking)
+            det_t = normalize_model_identifier(detected_thinking)
+            if exp_t in ("enabled", "thinking"):
+                return {
+                    "verified": False,
+                    "status": "BLOCKED_THINKING_MODE_UNKNOWN",
+                    "reason": f"Generic '{expected_thinking}' is not allowed as wildcard; a concrete thinking mode must be specified",
+                    "detected_model": detected_model,
+                    "detected_thinking": detected_thinking,
+                }
+            if exp_t != det_t:
+                return {
+                    "verified": False,
+                    "status": "BLOCKED_THINKING_MODE_MISMATCH",
+                    "reason": f"Expected thinking mode '{expected_thinking}', but detected '{detected_thinking}'",
+                    "detected_model": detected_model,
+                    "detected_thinking": detected_thinking,
+                }
+
+        return {
+            "verified": True,
+            "status": "OK",
+            "model": detected_model,
+            "thinking_mode": detected_thinking,
+        }
+
+    def create_new_chat(self, session_id: str) -> Dict[str, Any]:
+        """Navigates borrowed tab to https://chatgpt.com/ to start a fresh chat session."""
+        try:
+            proc = self._run_bsk("navigate", "https://chatgpt.com/", "--session", session_id, timeout=30)
+            if proc.returncode != 0:
+                return {"ok": False, "error": f"Failed to navigate: {proc.stderr.strip() or proc.stdout.strip()}"}
+            return {"ok": True, "url": "https://chatgpt.com/"}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def run_e2e_review(
         self,
         task_id: str,
@@ -722,6 +916,11 @@ class BrowserRelay:
         target_tab_id: Optional[str] = None,
         target_url_prefix: Optional[str] = None,
         timeout_secs: int = 180,
+        expected_model: Optional[str] = None,
+        expected_thinking: Optional[str] = None,
+        skip_send: bool = False,
+        is_recovery: bool = False,
+        on_delivery_confirmed: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Runs the full E2E review cycle safely.
 
@@ -768,29 +967,92 @@ class BrowserRelay:
             journal_entry["verified_tab_id"] = target_tab.tab_id
             journal_entry["verified_url"] = target_tab.url
 
-            # Borrow tab with human confirmation
-            self.borrow_tab(session_id, target_tab.tab_id, timeout_secs=25)
+            # Borrow tab with human confirmation (60s human confirmation window)
+            self.borrow_tab(session_id, target_tab.tab_id, timeout_secs=60)
             borrowed_tab_id = target_tab.tab_id
 
-            # Verify target URL has not changed after borrowing tab (even with target_tab_id only)
+            # If no specific conversation target URL was provided, ensure clean new chat
+            if target_url_prefix:
+                expected_target_url = target_url_prefix
+            elif target_tab_id:
+                expected_target_url = target_tab.url
+            else:
+                expected_target_url = None
+
             live_url = self.get_current_url(session_id)
-            if not match_conversation_url(target_tab.url, live_url):
-                raise ConversationMismatchError(
-                    f"Tab navigation detected: tab navigated after borrow from initial target '{target_tab.url}' to '{live_url}'"
-                )
-            if target_url_prefix and not match_conversation_url(target_url_prefix, live_url):
-                raise ConversationMismatchError(
-                    f"Tab navigation detected: tab navigated away from target conversation after borrow: from '{target_tab.url}' to '{live_url}'"
-                )
+
+            if not target_url_prefix and not target_tab_id:
+                if is_recovery:
+                    raise ConversationMismatchError("Cannot recover exchange without explicit target conversation URL or tab ID; create_new_chat is forbidden during recovery")
+                if "/c/" in live_url:
+                    create_res = self.create_new_chat(session_id)
+                    if create_res.get("ok"):
+                        live_url = self.get_current_url(session_id)
+                expected_target_url = "https://chatgpt.com/"
+            else:
+                if not match_conversation_url(target_tab.url, live_url):
+                    raise ConversationMismatchError(
+                        f"Tab navigation detected: tab navigated after borrow from initial target '{target_tab.url}' to '{live_url}'"
+                    )
+                if expected_target_url and not match_conversation_url(expected_target_url, live_url):
+                    raise ConversationMismatchError(
+                        f"Tab navigation detected: tab navigated away from target conversation after borrow: from '{expected_target_url}' to '{live_url}'"
+                    )
             journal_entry["verified_live_url"] = live_url
 
-            # Send prompt (with TOCTOU checks and formal user turn hash verification)
-            self.send_prompt(
-                session_id, message, request_id,
-                expected_message_hash=msg_hash,
-                expected_url=live_url,
+            # Unconditionally verify model and thinking mode before sending / proceeding
+            m_check = self.check_model_and_thinking(
+                session_id, expected_model=expected_model, expected_thinking=expected_thinking
             )
-            journal_entry["delivery_status"] = "CONFIRMED_USER_TURN"
+            if not m_check.get("verified"):
+                journal_entry["status"] = m_check.get("status", "BLOCKED_MODEL_MISMATCH")
+                journal_entry["error"] = m_check.get("reason", "Model or thinking mode verification failed")
+                journal_entry["manual_fallback_required"] = True
+                return journal_entry
+            journal_entry["verified_model"] = m_check.get("model")
+            journal_entry["verified_thinking"] = m_check.get("thinking_mode")
+
+            if skip_send:
+                user_turn_info = self.verify_user_turn_exists(session_id, request_id)
+                if not user_turn_info.get("exists"):
+                    journal_entry["status"] = "BLOCKED_DELIVERY_UNCONFIRMED"
+                    journal_entry["error"] = f"Recovery check failed: user turn '{request_id}' not found in DOM ({user_turn_info.get('status')})"
+                    journal_entry["manual_fallback_required"] = True
+                    return journal_entry
+                journal_entry["delivery_status"] = "CONFIRMED_USER_TURN"
+            else:
+                # Send prompt (with TOCTOU checks and formal user turn hash verification)
+                self.send_prompt(
+                    session_id, message, request_id,
+                    expected_message_hash=msg_hash,
+                    expected_url=live_url,
+                    expected_model=expected_model,
+                    expected_thinking=expected_thinking,
+                )
+                journal_entry["delivery_status"] = "CONFIRMED_USER_TURN"
+
+            # Check if URL transitioned to a new conversation /c/<id>
+            after_send_url = self.get_current_url(session_id)
+            if "/c/" in after_send_url and validate_chatgpt_origin(after_send_url):
+                journal_entry["chat_url"] = after_send_url
+            else:
+                journal_entry["chat_url"] = live_url
+
+            # On delivery confirmed callback (persists /c/id immediately before wait_for_response)
+            if on_delivery_confirmed:
+                try:
+                    on_delivery_confirmed({
+                        "delivery_status": "CONFIRMED_USER_TURN",
+                        "chat_url": journal_entry.get("chat_url"),
+                        "tab_id": target_tab.tab_id,
+                        "model": journal_entry.get("verified_model"),
+                        "thinking_mode": journal_entry.get("verified_thinking"),
+                    })
+                except Exception as exc:
+                    journal_entry["status"] = "BLOCKED_CALLBACK_FAILED"
+                    journal_entry["error"] = f"on_delivery_confirmed callback failed: {exc}"
+                    journal_entry["manual_fallback_required"] = True
+                    return journal_entry
 
             # Wait for response completion
             resp_info = self.wait_for_response(session_id, request_id, timeout_secs=timeout_secs)

@@ -6,7 +6,23 @@ v2 默认先读取 [GitHub Review 流程](github.md)。每任务在独立本地�
 
 ## 新建与续接
 
-收到首轮任务书后核对授权范围与真实项目情况，保存用户原始需求。可用 Python 时执行：
+Antigravity 环境默认推荐运行持久工作流 CLI（详见 [持久工作流流程](workflow.md)）：
+
+```text
+# 初始化任务绑定当前 Git HEAD
+python "<skill>/scripts/workflow.py" start --project "<project>" --title "<title>"
+
+# 发起往返交互（自动借用已登录 ChatGPT 标签页、核对模型、确认正式回合并等待机器可读回复）
+python "<skill>/scripts/workflow.py" exchange --project "<project>" --chat-url "<chat-url>"
+
+# 完成本地实现和真实测试后，记录工作并绑定 commit SHA 与真实测试证据
+python "<skill>/scripts/workflow.py" record-work --project "<project>" --head-sha "<commit-sha>" --test-evidence "<test-results>"
+
+# 查看当前状态（stage、round、commit SHA、下一动作）
+python "<skill>/scripts/workflow.py" status --project "<project>"
+```
+
+其他 Agent（如 Codex、Claude Code）或无自动化浏览器环境继续使用 `relay.py`：
 
 ```text
 python "<skill>/scripts/relay.py" start --project "<project>" --title "<title>"
@@ -16,7 +32,7 @@ python "<skill>/scripts/relay.py" start --project "<project>" --title "<title>"
 
 协调端给定新任务 ID 时添加 --task-id <id>；工具会按原样创建，冲突或非法 ID 会失败。已有记录无论位于默认目录还是已登记的其他路径，都先续接，不因工具默认目录没找到它而重复新建。
 
-续接时读活动任务指针或明确指定的记录路径，再读五份记录与未处理反馈。GitHub 模式核对同一 PR、当前本地和远端 SHA、未推送改动与待批准内容。已完成工作不重做，旧结论因源码变化失效时明确记录，勿覆盖其他任务。
+续接时读活动任务指针或明确指定的记录路径，再读五份记录与未处理反馈。Antigravity 单端工作流可直接使用 `workflow.py resume --project "<project>" --chat-url "<new-chat-url>"` 自动重构上下文并保持历史身份。GitHub 模式核对同一 PR、当前本地和远端 SHA、未推送改动与待批准内容。已完成工作不重做，旧结论因源码变化失效时明确记录，勿覆盖其他任务。
 
 ## 执行与证据
 

@@ -22,6 +22,7 @@ TabInfo = browser_relay.TabInfo
 TabNotFoundError = browser_relay.TabNotFoundError
 build_check_user_turn_js = browser_relay.build_check_user_turn_js
 build_extract_js = browser_relay.build_extract_js
+build_check_model_and_thinking_js = browser_relay.build_check_model_and_thinking_js
 validate_chatgpt_origin = browser_relay.validate_chatgpt_origin
 
 
@@ -575,7 +576,162 @@ class BrowserRelayTests(unittest.TestCase):
             self.assertEqual(result["cleanup_status"], "CLEANUP_FAILED")
             self.assertNotEqual(result["status"], "SUCCESS")
 
+    def test_dom_model_and_thinking_detection_in_node(self):
+        """Tests model and thinking mode DOM detection running inside Node.js DOM fixture."""
+        dom = {
+            "tag": "main",
+            "children": [
+                {
+                    "tag": "button",
+                    "attrs": {"data-testid": "model-switcher-dropdown-button"},
+                    "text": "ChatGPT (o1)",
+                },
+                {
+                    "tag": "button",
+                    "attrs": {"data-testid": "thought-indicator"},
+                    "text": "Thought for 12 seconds",
+                },
+            ],
+        }
+        js = build_check_model_and_thinking_js()
+        res = self.run_in_dom(dom, js)
+        self.assertTrue(res["detected"])
+        self.assertIn("o1", res["model"])
+        self.assertIn("Thought", res["thinking_mode"])
+
+    def test_dom_custom_gpt_model_and_thinking_detection_in_node(self):
+        """Tests Custom GPT model and composer reasoning effort pill detection in Node.js DOM fixture."""
+        dom = {
+            "tag": "main",
+            "children": [
+                {
+                    "tag": "header",
+                    "children": [
+                        {"tag": "div", "text": "OVE PHD\n分享"},
+                        {"tag": "button", "attrs": {"aria-label": "切换模式，当前模式：ChatGPT"}, "text": "ChatGPT"},
+                    ],
+                },
+                {
+                    "tag": "div",
+                    "attrs": {"id": "composer-background"},
+                    "children": [
+                        {"tag": "button", "attrs": {"aria-label": "选择 ChatGPT 模型"}, "text": "High"},
+                    ],
+                },
+            ],
+        }
+        js = build_check_model_and_thinking_js()
+        res = self.run_in_dom(dom, js)
+        self.assertTrue(res["detected"])
+        self.assertEqual(res["model"], "ChatGPT")
+        self.assertEqual(res["thinking_mode"], "High")
+
+
+    def test_check_model_and_thinking_validation(self):
+        """Tests BrowserRelay.check_model_and_thinking validation logic."""
+        with mock.patch.object(self.relay, "evaluate") as mock_eval:
+            # Case 1: Match
+            mock_eval.return_value = json.dumps({
+                "detected": True,
+                "model": "GPT-4o",
+                "thinking_mode": "standard",
+            })
+            res = self.relay.check_model_and_thinking("sess-1", expected_model="gpt-4o")
+            self.assertTrue(res["verified"])
+            self.assertEqual(res["status"], "OK")
+
+            # Case 2: Model Mismatch fails closed
+            res_mismatch = self.relay.check_model_and_thinking("sess-1", expected_model="o1-preview")
+            self.assertFalse(res_mismatch["verified"])
+            self.assertEqual(res_mismatch["status"], "BLOCKED_MODEL_MISMATCH")
+
+            # Case 3: Thinking mode Mismatch fails closed
+            res_think_mismatch = self.relay.check_model_and_thinking(
+                "sess-1", expected_model="gpt-4o", expected_thinking="deep-thought"
+            )
+            self.assertFalse(res_think_mismatch["verified"])
+            self.assertEqual(res_think_mismatch["status"], "BLOCKED_THINKING_MODE_MISMATCH")
+
+            # Case 4: Substring downgrade rejection (expected GPT-5 Pro, detected GPT-5)
+            mock_eval.return_value = json.dumps({
+                "detected": True,
+                "model": "GPT-5",
+                "thinking_mode": "standard",
+            })
+            res_downgrade = self.relay.check_model_and_thinking("sess-1", expected_model="GPT-5 Pro")
+            self.assertFalse(res_downgrade["verified"])
+            self.assertEqual(res_downgrade["status"], "BLOCKED_MODEL_MISMATCH")
+
+            # Case 5: Missing thinking mode in DOM fails closed with BLOCKED_THINKING_MODE_UNKNOWN
+            mock_eval.return_value = json.dumps({
+                "detected": True,
+                "model": "o3-mini",
+                "thinking_mode": "",
+            })
+            res_no_thinking = self.relay.check_model_and_thinking("sess-1", expected_model="o3-mini")
+            self.assertFalse(res_no_thinking["verified"])
+            self.assertEqual(res_no_thinking["status"], "BLOCKED_THINKING_MODE_UNKNOWN")
+
+            # Case 6: Missing model in DOM fails closed with BLOCKED_MODEL_UNKNOWN
+            mock_eval.return_value = json.dumps({
+                "detected": False,
+                "model": "",
+                "thinking_mode": "standard",
+            })
+            res_no_model = self.relay.check_model_and_thinking("sess-1")
+            self.assertFalse(res_no_model["verified"])
+            self.assertEqual(res_no_model["status"], "BLOCKED_MODEL_UNKNOWN")
+
+            # Case 7: Generic 'enabled' / 'thinking' rejected as wildcard; concrete mode required
+            mock_eval.return_value = json.dumps({
+                "detected": True,
+                "model": "o3-mini",
+                "thinking_mode": "enabled",
+            })
+            res_generic = self.relay.check_model_and_thinking("sess-1", expected_thinking="extended")
+            self.assertFalse(res_generic["verified"])
+            self.assertEqual(res_generic["status"], "BLOCKED_THINKING_MODE_UNKNOWN")
+
+    def test_create_new_chat_navigates_to_root(self):
+        with mock.patch.object(self.relay, "_run_bsk") as mock_bsk:
+            mock_bsk.return_value = subprocess.CompletedProcess(
+                args=[], returncode=0, stdout="", stderr=""
+            )
+            res = self.relay.create_new_chat("sess-1")
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["url"], "https://chatgpt.com/")
+
+    def test_run_e2e_review_blocks_on_model_mismatch(self):
+        with mock.patch.object(self.relay, "check_status") as mock_status, \
+             mock.patch.object(self.relay, "start_session") as mock_start, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
+             mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "check_model_and_thinking") as mock_check, \
+             mock.patch.object(self.relay, "return_tab") as mock_return, \
+             mock.patch.object(self.relay, "stop_session") as mock_stop:
+
+            mock_status.return_value = browser_relay.BrowserStatus(daemon_running=True, connected_browser_id="b-1")
+            mock_start.return_value = "sess-1"
+            mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/conv-1")
+            mock_borrow.return_value = True
+            mock_url.return_value = "https://chatgpt.com/c/conv-1"
+            mock_check.return_value = {
+                "verified": False,
+                "status": "BLOCKED_MODEL_MISMATCH",
+                "reason": "Model mismatch",
+            }
+            mock_return.return_value = True
+            mock_stop.return_value = True
+
+            result = self.relay.run_e2e_review(
+                "task-1", "msg [REQ-1]", "REQ-1", expected_model="o1"
+            )
+            self.assertEqual(result["status"], "BLOCKED_MODEL_MISMATCH")
+            self.assertIn("Model mismatch", result["error"])
+            mock_return.assert_called_once()
+            mock_stop.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
-
