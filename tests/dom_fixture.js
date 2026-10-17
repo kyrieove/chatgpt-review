@@ -70,6 +70,15 @@ class DOMNode {
         }
     }
 
+    contains(other) {
+        let curr = other;
+        while (curr) {
+            if (curr === this) return true;
+            curr = curr.parentNode;
+        }
+        return false;
+    }
+
     cloneNode(deep = true) {
         if (this.nodeType === 3) {
             return new DOMNode(3, '', {}, this._text);

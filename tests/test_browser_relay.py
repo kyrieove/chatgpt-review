@@ -550,6 +550,66 @@ class BrowserRelayTests(unittest.TestCase):
         self.assertIn("第1段正文：概述。", res["text"])
         self.assertIn("第2段正文：详细发现。", res["text"])
 
+    def test_dom_modern_group_turn_and_markdown_root_extraction(self):
+        """Tests turn discovery and MarkdownRoot text extraction for modern ChatGPT layout."""
+        req_id = "REQ-MODERN-LAYOUT-001"
+        reply = "第一段评审建议。\n\n第二段代码修复分析。"
+        dom = {
+            "tag": "main",
+            "children": [
+                {
+                    "tag": "div",
+                    "attrs": {"class": "flex flex-col gap-3 browser:gap-1"},
+                    "children": [
+                        {
+                            "tag": "div",
+                            "attrs": {"class": "block-test"},
+                            "children": [
+                                {
+                                    "tag": "div",
+                                    "attrs": {"class": "group/user-message"},
+                                    "text": f"开始代码审查 [{req_id}]",
+                                },
+                                {
+                                    "tag": "button",
+                                    "attrs": {"aria-label": "编辑消息"},
+                                    "text": "编辑",
+                                },
+                            ],
+                        },
+                        {
+                            "tag": "div",
+                            "attrs": {"class": "block-test"},
+                            "children": [
+                                {
+                                    "tag": "div",
+                                    "attrs": {"class": "MarkdownRoot-test"},
+                                    "text": reply,
+                                },
+                                {
+                                    "tag": "button",
+                                    "attrs": {"aria-label": "复制"},
+                                    "text": "复制",
+                                },
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+        # Check user turn
+        js_check = build_check_user_turn_js(req_id)
+        res_check = self.run_in_dom(dom, js_check)
+        self.assertTrue(res_check["exists"])
+        self.assertEqual(res_check["status"], "OK")
+
+        # Extract assistant turn
+        js_extract = build_extract_js(req_id)
+        res_extract = self.run_in_dom(dom, js_extract)
+        self.assertEqual(res_extract["status"], "OK")
+        self.assertEqual(res_extract["text"], reply)
+
     def test_run_e2e_review_records_diagnostic_when_cleanup_fails(self):
         """Resource cleanup: return_tab or stop_session returning False must be recorded as error."""
         with mock.patch.object(self.relay, "check_status") as mock_status, \

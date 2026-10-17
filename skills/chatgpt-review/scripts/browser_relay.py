@@ -157,10 +157,13 @@ def build_check_user_turn_js(request_id: str) -> str:
         if (el.querySelector('[data-testid*="user"]')) return 'user';
         if (el.querySelector('[data-testid*="assistant"]')) return 'assistant';
 
-        if (el.querySelector('button[aria-label*="Edit message"], button[aria-label*="编辑消息"], button[data-testid*="edit"]')) {{
+        if (el.classList && (el.classList.contains('group/user-message') || el.classList.contains('user-message'))) return 'user';
+        if (el.querySelector('[class*="group/user-message"], [class*="user-message"]')) return 'user';
+
+        if (el.querySelector('button[aria-label="Edit message"], button[aria-label="编辑消息"], button[aria-label="编辑"], button[aria-label="Edit"], button[data-testid*="edit"]')) {{
             return 'user';
         }}
-        if (el.querySelector('button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown')) {{
+        if (el.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown, [class*="MarkdownRoot"]')) {{
             return 'assistant';
         }}
         return null;
@@ -174,10 +177,28 @@ def build_check_user_turn_js(request_id: str) -> str:
         if (candidates.length === 0) {{
             candidates = Array.from(main.querySelectorAll('[data-message-author-role]'));
         }}
+        if (candidates.length === 0) {{
+            const groups = Array.from(main.querySelectorAll('[class*="browser:gap-1"], [class*="gap-3"]'));
+            let groupChildren = [];
+            for (const g of groups) {{
+                groupChildren.push(...Array.from(g.children));
+            }}
+            if (groupChildren.length > 0) {{
+                candidates = groupChildren;
+            }}
+        }}
+        if (candidates.length === 0) {{
+            candidates = Array.from(main.querySelectorAll('[class*="block-"]'));
+        }}
         const valid = [];
         for (const c of candidates) {{
             const role = getTurnRole(c);
-            if (role) valid.push({{ node: c, role }});
+            if (role) {{
+                if (valid.length > 0 && typeof valid[valid.length - 1].node.contains === 'function' && valid[valid.length - 1].node.contains(c)) {{
+                    continue;
+                }}
+                valid.push({{ node: c, role }});
+            }}
         }}
         return valid;
     }}
@@ -239,10 +260,13 @@ def build_extract_js(request_id: str) -> str:
         if (el.querySelector('[data-testid*="user"]')) return 'user';
         if (el.querySelector('[data-testid*="assistant"]')) return 'assistant';
 
-        if (el.querySelector('button[aria-label*="Edit message"], button[aria-label*="编辑消息"], button[data-testid*="edit"]')) {{
+        if (el.classList && (el.classList.contains('group/user-message') || el.classList.contains('user-message'))) return 'user';
+        if (el.querySelector('[class*="group/user-message"], [class*="user-message"]')) return 'user';
+
+        if (el.querySelector('button[aria-label="Edit message"], button[aria-label="编辑消息"], button[aria-label="编辑"], button[aria-label="Edit"], button[data-testid*="edit"]')) {{
             return 'user';
         }}
-        if (el.querySelector('button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown')) {{
+        if (el.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown, [class*="MarkdownRoot"]')) {{
             return 'assistant';
         }}
         return null;
@@ -256,10 +280,28 @@ def build_extract_js(request_id: str) -> str:
         if (candidates.length === 0) {{
             candidates = Array.from(main.querySelectorAll('[data-message-author-role]'));
         }}
+        if (candidates.length === 0) {{
+            const groups = Array.from(main.querySelectorAll('[class*="browser:gap-1"], [class*="gap-3"]'));
+            let groupChildren = [];
+            for (const g of groups) {{
+                groupChildren.push(...Array.from(g.children));
+            }}
+            if (groupChildren.length > 0) {{
+                candidates = groupChildren;
+            }}
+        }}
+        if (candidates.length === 0) {{
+            candidates = Array.from(main.querySelectorAll('[class*="block-"]'));
+        }}
         const valid = [];
         for (const c of candidates) {{
             const role = getTurnRole(c);
-            if (role) valid.push({{ node: c, role }});
+            if (role) {{
+                if (valid.length > 0 && typeof valid[valid.length - 1].node.contains === 'function' && valid[valid.length - 1].node.contains(c)) {{
+                    continue;
+                }}
+                valid.push({{ node: c, role }});
+            }}
         }}
         return valid;
     }}
@@ -328,7 +370,7 @@ def build_extract_js(request_id: str) -> str:
     toRemove.forEach(b => b.remove());
 
     // Extract ALL prose/markdown blocks, joining them with double newline
-    const proseBlocks = Array.from(clone.querySelectorAll('.prose, .markdown'));
+    const proseBlocks = Array.from(clone.querySelectorAll('.prose, .markdown, [class*="MarkdownRoot"]'));
     let extractedText = '';
     if (proseBlocks.length > 0) {{
         extractedText = proseBlocks.map(b => (b.innerText || b.textContent || '').trim()).filter(Boolean).join('\\n\\n');
