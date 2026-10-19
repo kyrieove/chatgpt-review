@@ -11,6 +11,14 @@ class DOMNode {
         this._text = text;
     }
 
+    get id() {
+        return this.attributes.id || '';
+    }
+
+    set id(val) {
+        this.attributes.id = String(val);
+    }
+
     getAttribute(name) {
         return this.attributes[name] !== undefined ? String(this.attributes[name]) : null;
     }
@@ -70,6 +78,12 @@ class DOMNode {
         }
     }
 
+    focus() {
+        if (this._ownerDocument) {
+            this._ownerDocument.activeElement = this;
+        }
+    }
+
     contains(other) {
         let curr = other;
         while (curr) {
@@ -77,6 +91,13 @@ class DOMNode {
             curr = curr.parentNode;
         }
         return false;
+    }
+
+    getClientRects() {
+        if (this.attributes && this.attributes['data-hidden'] !== undefined) {
+            return [];
+        }
+        return [{}];
     }
 
     cloneNode(deep = true) {
@@ -179,6 +200,7 @@ function buildDom(def) {
     if (def.text) {
         node.appendChild(new DOMNode(3, '', {}, def.text));
     }
+    node.dispatchEvent = () => {};
     if (Array.isArray(def.children)) {
         for (const childDef of def.children) {
             node.appendChild(buildDom(childDef));
@@ -190,6 +212,7 @@ function buildDom(def) {
 function runInDom(domDef, jsCode) {
     const docRoot = buildDom(domDef);
     const document = {
+        activeElement: null,
         querySelector: (sel) => {
             if (docRoot.nodeType === 1 && matchSelector(docRoot, sel)) return docRoot;
             return docRoot.querySelector(sel);
@@ -200,8 +223,30 @@ function runInDom(domDef, jsCode) {
                 return [docRoot, ...matches];
             }
             return matches;
+        },
+        execCommand: (cmd, showUI, value) => {
+            if (cmd === 'insertText' && document.activeElement) {
+                document.activeElement.innerText = value;
+                return true;
+            }
+            if (cmd === 'selectAll' || cmd === 'delete') {
+                if (cmd === 'delete' && document.activeElement) {
+                    document.activeElement.innerText = '';
+                }
+                return true;
+            }
+            return false;
         }
     };
+
+    function attachDoc(node) {
+        node._ownerDocument = document;
+        for (const c of node.children) {
+            attachDoc(c);
+        }
+    }
+    attachDoc(docRoot);
+
     const window = {
         document,
         location: { href: domDef.href || 'https://chatgpt.com/c/test' }
