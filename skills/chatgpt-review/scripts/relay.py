@@ -49,7 +49,7 @@ DENIED_NAME_RE = re.compile(
     r"private-key|private_key|token)(?:[-_.]|$)"
 )
 RESERVED_ROOT_FILES = {
-    "handoff.md", "chatgpt_start.md", "github_review.md", "review_protocol.md",
+    "handoff.md", "github_review.md", "review_protocol.md",
     "package_info.json", "sha256sums.txt",
 }
 SECRET_PATTERNS = tuple(
@@ -132,6 +132,7 @@ def start_task(args):
     title = args.title.strip()
     if not title:
         raise RelayError("Title must not be empty.")
+    task_id = _validate_task_id(args.task_id) if args.task_id is not None else None
     if args.slug and args.slug.strip():
         slug = args.slug.lower().strip("-")
         if not SLUG_RE.fullmatch(slug):
@@ -151,17 +152,24 @@ def start_task(args):
     if _is_link(current) or current.exists() and not current.is_file():
         raise RelayError("Refusing to overwrite a non-file handoffs/.current-task pointer.")
 
-    timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
-    suffix = 1
-    while True:
-        task_slug = slug if suffix == 1 else f"{slug}-{suffix}"
-        task_id = f"{timestamp}-{task_slug}"
+    if task_id is not None:
         task_dir = handoffs / task_id
         try:
             task_dir.mkdir()
-            break
-        except FileExistsError:
-            suffix += 1
+        except FileExistsError as exc:
+            raise RelayError(f"Task id already exists: {task_id}") from exc
+    else:
+        timestamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
+        suffix = 1
+        while True:
+            task_slug = slug if suffix == 1 else f"{slug}-{suffix}"
+            task_id = f"{timestamp}-{task_slug}"
+            task_dir = handoffs / task_id
+            try:
+                task_dir.mkdir()
+                break
+            except FileExistsError:
+                suffix += 1
 
     updated = iso_now()
     rendered = _template_texts(title, task_id, updated)
@@ -316,49 +324,65 @@ def _copy_selected(root, source, relative, stage, max_bytes, skipped, entries, m
     if not relative:
         raise RelayError("Cannot package the project root as a file.")
     parts = tuple(relative.split("/"))
+    strict_label = (
+        "Required task file"
+        if len(parts) > 2 and parts[0].casefold() == "handoffs" and parts[1] == entries["task_id"]
+        else "Explicitly included file"
+    )
     if parts and parts[0].casefold() == "handoffs":
         if len(parts) < 2 or parts[1] != entries["task_id"]:
+            if mandatory:
+                raise RelayError(f"Explicit include is outside the active task: {relative}")
             _skip(skipped, relative)
             return
         task_relative = _task_relative(relative, entries["task_id"])
         if _task_evidence_status(task_relative, False, entries) != "include":
+            if mandatory:
+                raise RelayError(f"Explicit include is excluded by --evidence: {relative}")
             _skip(skipped, relative)
             return
     if len(parts) == 1 and parts[0].casefold() in RESERVED_ROOT_FILES:
+        if mandatory:
+            raise RelayError(f"Explicit include is reserved: {relative}")
         _skip(skipped, relative)
         return
     if _is_link(source):
         if mandatory:
-            raise RelayError(f"Required task file is a symlink: {relative}")
+            raise RelayError(f"{strict_label} is a symlink: {relative}")
+        _skip(skipped, relative)
+        return
+    if not source.is_file():
+        if mandatory:
+            raise RelayError(f"{strict_label} is not a regular file: {relative}")
         _skip(skipped, relative)
         return
     try:
         size = source.stat().st_size
     except OSError as exc:
         if mandatory:
-            raise RelayError(f"Required task file cannot be inspected: {relative}") from exc
+            raise RelayError(f"{strict_label} cannot be inspected: {relative}") from exc
         _skip(skipped, relative)
         return
     if _excluded_name(source.name):
         if mandatory:
-            raise RelayError(f"Required task file has a denied filename: {relative}")
+            raise RelayError(f"{strict_label} has a denied filename: {relative}")
         _skip(skipped, relative)
         return
     if size > max_bytes:
         if mandatory:
-            raise RelayError(f"Required task file exceeds --max-file-mb: {relative}")
+            raise RelayError(f"{strict_label} exceeds --max-file-mb: {relative}")
         _skip(skipped, relative)
         return
     try:
         data = _safe_read(source)
     except OSError as exc:
         if mandatory:
-            raise RelayError(f"Required task file cannot be read: {relative}") from exc
+            raise RelayError(f"{strict_label} cannot be read: {relative}") from exc
         _skip(skipped, relative)
         return
     if len(data) > max_bytes:
         if mandatory:
-            raise RelayError(f"Required task file exceeds --max-file-mb: {relative}")
+            raise RelayError(f"{strict_label} exceeds --max-file-mb: {relative}")
         _skip(skipped, relative)
         return
     if relative in entries["files"]:
@@ -440,6 +464,8 @@ def _select_project_files(root, task_id, includes, stage, max_bytes, skipped, en
                 part.casefold() in DENIED_DIRS or _excluded_name(part)
                 for part in directory_parts
             ):
+                if not source.is_dir():
+                    raise RelayError(f"Explicit include is under a filtered directory: {include}")
                 _skip(skipped, "/".join(parts))
                 continue
             try:
@@ -447,7 +473,10 @@ def _select_project_files(root, task_id, includes, stage, max_bytes, skipped, en
             except (OSError, ValueError) as exc:
                 raise RelayError(f"Explicit include escapes the project: {include}") from exc
             entries["include_scopes"].append(("/".join(parts), source.is_dir()))
-            _walk_tree(root, source, "/".join(parts), stage, task_id, max_bytes, skipped, entries)
+            if source.is_dir():
+                _walk_tree(root, source, "/".join(parts), stage, task_id, max_bytes, skipped, entries)
+            else:
+                _copy_selected(root, source, "/".join(parts), stage, max_bytes, skipped, entries, mandatory=True)
     else:
         entries["selection_explicit"] = False
         entries["include_scopes"] = []
@@ -826,7 +855,19 @@ def pack_review(args):
         )
         _write_stage_text(stage, "HANDOFF.md", pointer)
         for destination, source in required_references.items():
-            _add_required_source(source, stage, destination)
+            if destination in entries["files"]:
+                base_name = "CHATGPT_COORDINATION"
+                ext = ".md"
+                candidate = f"{base_name}{ext}"
+                suffix = 1
+                while candidate in entries["files"]:
+                    candidate = f"{base_name}_{suffix}{ext}"
+                    suffix += 1
+                _add_required_source(source, stage, candidate)
+                entries["files"].add(candidate)
+            else:
+                _add_required_source(source, stage, destination)
+                entries["files"].add(destination)
 
         package_id = uuid.uuid4().hex
         skipped_paths = sorted(skipped)
@@ -935,6 +976,7 @@ def build_parser():
     start.add_argument("--project", required=True, help="project directory")
     start.add_argument("--title", required=True, help="task title")
     start.add_argument("--slug", help="optional lowercase task slug")
+    start.add_argument("--task-id", help="use this exact task id instead of generating one")
     start.set_defaults(handler=start_task)
 
     pack = subparsers.add_parser("pack", help="create a self-contained review ZIP")

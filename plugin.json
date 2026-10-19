@@ -1,0 +1,4 @@
+{
+  "name": "chatgpt-review",
+  "description": "Coordinate ChatGPT and local agents with persistent handoffs, fixed Git revisions, user-approved review rounds, and portable ZIP fallback."
+}

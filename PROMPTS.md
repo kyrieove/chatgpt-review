@@ -76,3 +76,58 @@
 审查完整相关源码和本轮实际证据，缺材料给收集任务。
 输出绑定此包的反馈。旧历史摘要是执行端报告，不是你直接检查过的旧日志。
 ```
+
+## Antigravity 单端自动协作指令
+
+### 计划轮指令（由 workflow.py exchange 自动组装并注入，亦可用于手动调试）
+```text
+# Antigravity Task Plan Request [req-<task_id>-r1-plan]
+- Task ID: <task_id>
+- Round: 1 (Planning)
+- Input Baseline Commit SHA: <head_sha>
+- Title: <title>
+
+请审查需求并输出分步实施计划与验收标准。回复末尾必须包含如下机器可读 JSON 区块：
+```json:chatgpt-review
+{
+  "task_id": "<task_id>",
+  "round": 1,
+  "reviewed_head_sha": "<head_sha>",
+  "decision": "PLAN_READY",
+  "findings": [],
+  "next_action": "在本地功能分支实施代码并运行测试"
+}
+```
+```
+
+### 审查轮指令（由 workflow.py exchange 自动组装并注入）
+```text
+# Antigravity Code Review Request [req-<task_id>-r<n>-review]
+- Task ID: <task_id>
+- Round: <n>
+- Reviewed Head Commit SHA: <head_sha>
+- Test Evidence:
+<test-evidence>
+
+请针对上述提交与测试证据审查。回复末尾必须包含如下机器可读 JSON 区块：
+```json:chatgpt-review
+{
+  "task_id": "<task_id>",
+  "round": <n>,
+  "reviewed_head_sha": "<head_sha>",
+  "decision": "ACCEPTED",
+  "findings": [],
+  "next_action": "任务验收完成"
+}
+```
+（注：decision 仅限 PLAN_READY, CHANGES_REQUESTED, ACCEPTED, NEEDS_INPUT, BLOCKED）
+```
+
+### 换聊天续接指令
+```text
+继续 Antigravity 单端任务：task_id <task_id>。
+前序聊天：<old_chat_url>。
+被测源码 SHA：<head_sha>。
+当前阶段：<stage>。
+请读取上下文并依据当前版本输出审查或下一步指令。
+```

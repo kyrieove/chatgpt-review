@@ -1,0 +1,530 @@
+ChatGPT 说：
+
+第一轮建议：在本地分支增加最小 plugin.json，补齐两项 CLI 边界测试，并验证 Antigravity 能否正确识别插件；暂不推送、不创建 PR。
+
+我已通过连接的 GitHub 读取指定公开基线，并核对 Antigravity 官方插件文档。
+
+公开基线 SHA
+
+已核实
+
+c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22
+
+指定的六份文件
+
+全部读取
+
+本地功能分支
+
+未读取
+
+17 项测试
+
+执行端报告，未复跑
+
+远端写入
+
+未执行
+一、实际读取的源码与版本证据
+
+所有文件均使用 ref=c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22 读取，而不是默认分支的浮动内容。
+
+文件
+
+	
+
+Git blob SHA（前 12 位）
+
+	
+
+阅读结果
+
+
+
+
+CHATGPT_START.md
+
+	
+
+fcbb94f8f7dd
+
+	
+
+已读取，208 行
+
+
+
+
+SKILL.md
+
+	
+
+ee2480c13a27
+
+	
+
+已读取，52 行
+
+
+
+
+references/github.md
+
+	
+
+0ce717d58249
+
+	
+
+已读取，58 行
+
+
+
+
+references/contract.md
+
+	
+
+1e15a057015b
+
+	
+
+已读取，73 行
+
+
+
+
+scripts/relay.py
+
+	
+
+03ed5d4d121f
+
+	
+
+已读取，963 行
+
+
+
+
+tests/test_relay.py
+
+	
+
+6714da493e6f
+
+	
+
+已读取，547 行
+
+其中有一个路径差异：测试文件实际位于仓库根目录 tests/test_relay.py，而不是 skills/chatgpt-review/tests/test_relay.py。我通过该提交的 Git Tree 确认了准确路径，并成功读取。
+
+另外也检查了 README.md、references/executor.md、build_bootstrap.py 和 docs/VALIDATION.md。
+
+当前基线架构已经合理： 一个核心 Skill、角色分离的执行与审查协议、五份任务记录、GitHub SHA 绑定，以及自包含的 ZIP 备用机制。没有必要重新设计整套协议。
+
+二、代码审查发现：5 项
+
+以下是静态源码审查结果。没有直接运行本仓库测试，也没有检查本地未推送分支。
+
+ID
+
+	
+
+分类
+
+	
+
+优先级
+
+	
+
+发现及证据
+
+
+
+
+F-001
+
+	
+
+确定的接口缺口
+
+	
+
+P2
+
+	
+
+relay.py:154–160、934–938。start 只能根据时间和标题生成 task_id，无法指定已经确定的 20261015-chatgpt-review-self-review。可能造成同一个任务被重复初始化。
+
+
+
+
+F-002
+
+	
+
+确定的行为缺陷
+
+	
+
+P2
+
+	
+
+relay.py:347–351、426–450。用户显式 --include 某个文件，但文件超过大小限制时，工具可能仅记录 skipped 后继续成功打包。请求的关键文件可能并未进入 ZIP。
+
+
+
+
+F-003
+
+	
+
+设计建议
+
+	
+
+P2
+
+	
+
+Git Tree 中尚无 plugin.json。现有 skills/chatgpt-review/ 已适合最小插件包装，但必须防止与已经共享安装的同名 Skill 重复激活。
+
+
+
+
+F-004
+
+	
+
+测试覆盖不足
+
+	
+
+P2
+
+	
+
+tests/test_relay.py:357–372、464–479。两个符号链接安全测试在 Windows 无权限时会跳过。代码有防护，但当前执行报告未证明这两个场景已通过。
+
+
+
+
+F-005
+
+	
+
+设计建议
+
+	
+
+P2
+
+	
+
+github.md:19–23 要求扫描拟推送提交历史；relay.py:629–644、870–873 只扫描本次 ZIP 暂存内容。二者职责不同，需要明确的推送前检查门禁，避免误把 pack 成功当作历史凭据检查通过。
+
+优先处理 F-001 和 F-002
+
+这两项比新增 UI 或 MCP 更重要，因为它们会影响 Review Relay 最基本的身份一致性与审查材料完整性。
+
+F-001 推荐新增可选的 start --task-id，校验格式、拒绝覆盖已有任务，不改变默认自动生成 ID 的现有行为。
+
+F-002 推荐明确语义：显式指定的单个文件无法打包时直接失败；指定目录中的部分文件被过滤时允许继续，但必须在报告中明确列出。
+
+F-004 不需要要求用户修改 Windows 权限才能通过测试。可以增加不依赖系统创建真实符号链接的隔离测试，并在支持符号链接的平台保留真实文件系统测试。
+
+三、是否值得做 Antigravity Plugin？
+
+值得，而且推荐直接在现有仓库根目录包装，不复制 Skill。
+
+Antigravity 官方文档确认插件以 plugin.json 作为标识，现有 skills/<name>/SKILL.md 可作为插件组件；CLI 支持本地目录及 GitHub URL 安装。
+Google Antigravity Docs
++1
+
+推荐目录结构
+
+chatgpt-review/
+├── plugin.json                  ← 唯一新增包装入口
+├── skills/
+│   └── chatgpt-review/
+│       ├── SKILL.md             ← 唯一协议入口
+│       ├── references/
+│       ├── scripts/relay.py
+│       └── templates/
+├── tests/
+│   └── test_relay.py
+├── CHATGPT_START.md
+└── README.md
+
+最小 manifest 建议：
+
+JSON
+
+{
+  "name": "chatgpt-review",
+  "description": "Coordinate external coding agents and ChatGPT reviews with persistent handoffs, fixed Git revisions, approval gates, and portable review packages."
+}
+
+
+官方文档展示的 schema 包含 name 和 description，要求 name 符合 ^[a-zA-Z0-9-_]+$；同时给出了 $schema 编辑器提示字段的示例。独立 schema URL 本次无法直接读取，因此上述最小文件是依据官方文档给出的候选实现，不是已经通过实际插件解析器验证的产物。
+Google Antigravity Docs
+
+三种实现方案的取舍
+
+方案
+
+	
+
+收益
+
+	
+
+判断
+
+
+
+
+根目录增加 plugin.json
+
+	
+
+不复制 Skill，Codex / Claude Code 仍引用原目录
+
+	
+
+推荐
+
+
+
+
+另建 antigravity-plugin/ 并复制 Skill
+
+	
+
+包装独立
+
+	
+
+容易发生协议漂移，不推荐
+
+
+
+
+增加 MCP、hooks、后台 Agent
+
+	
+
+自动化能力更多
+
+	
+
+当前并无对应必要需求，暂不增加
+
+安装能力和 Marketplace 上架要区分。
+
+官方目前明确提供本地目录安装、CLI GitHub URL 安装，以及官方 Marketplace 的插件浏览和安装；若希望上架 Marketplace，文档指向单独的申请表，并不等于任意第三方 GitHub 仓库都能自行发布到官方 Marketplace。
+Google Antigravity Docs
+
+第一阶段只验收：本地插件管理器能够安装和识别一个 chatgpt-review Skill。 不以 Marketplace 上架为目标，也不制作 VSIX。
+
+四、第一轮任务书：直接交给本地 Agent
+写作
+TASK_BRIEF — chatgpt-review Self-Review Round 1
+任务身份
+
+Repository：kyrieove/chatgpt-review
+
+Public baseline：c6ce0fa3f4e65d5dadbb61bf792e7d9f8b996b22
+
+Task ID：20261015-chatgpt-review-self-review
+
+Local branch：feature/chatgpt-review-self-review
+
+Review mode：GitHub Review 优先，未推送阶段用安全 ZIP
+
+当前权限：仅本地修改、测试、制作审查材料与规划，不允许远端写入
+
+总目标
+
+在不改变 chatgpt-review 核心协作协议的前提下，修复已确认的 CLI 边界问题，为 Antigravity 增加最小插件安装能力，同时保留 Codex、Claude Code 及其他 Agent 的独立 Skill 用法。
+
+本轮工作分五步完成。
+
+Step 1 — 核对本地状态
+
+读取当前仓库、功能分支、工作树、已有任务目录与本地修改。
+
+不得自动创建第二个 task_id，不得重置、覆盖或清理未提交修改。
+
+对照上述公开基线确认 F-001 至 F-005 是否仍适用。如果本地代码已经修复某项问题，记录证据，不重复修改。
+
+Step 2 — 修复 CLI
+
+F-001：任务 ID
+
+为 relay.py start 增加可选 --task-id。
+
+保留原来的自动生成机制。
+
+验证用户指定 ID 的合法性与唯一性。
+
+已有同名任务时不得覆盖五份记录。
+
+新增正常使用、冲突、非法 ID 的测试。
+
+F-002：显式文件收集
+
+单个显式 --include 文件超限、不可读取或被过滤时，必须明确失败或提示需要用户修改选择。
+
+对显式目录中的子文件维持受控过滤，但在包元数据中记录遗漏。
+
+增加超限、敏感文件名、正常收集及目录内过滤测试。
+
+保证不会因为本次修改而泄露原本应排除的文件。
+
+Step 3 — 增加最小 Plugin 包装
+
+在仓库根目录添加 plugin.json。
+
+仅包含官方文档支持并在当前安装环境验证过的字段，初版优先使用 name 和 description。
+
+复用原有：
+
+skills/chatgpt-review/SKILL.md
+
+不复制第二份 Skill，不新建另一套 references、模板或 relay.py。
+
+不增加 MCP、hooks、agents、rules，也不引入额外运行依赖。
+
+验证：
+
+plugin.json 可被 JSON 解析。
+
+Antigravity 能识别插件及其中的一个 Skill。
+
+Skill 相对路径、references、模板、脚本在插件安装后仍能解析。
+
+原有独立 Skill 安装方式继续有效。
+
+检查同名全局 Skill 与插件同时存在时是否重复显示或激活，记录实际结果。
+
+插件测试应优先使用隔离环境或临时工作区。不要未经用户许可修改现有全局 Agent 配置。
+
+如果插件安装测试无法安全执行，标记 BLOCKED，说明原因，不宣称插件已验证。
+
+Step 4 — 加固测试及协议一致性
+
+F-004：
+
+增加不依赖 Windows 符号链接创建权限的安全测试，同时保留原生符号链接测试。区分 PASS 和 SKIP。
+
+F-005：
+
+明确在 README、执行端流程和检查清单中：ZIP 暂存内容扫描与拟推送 commit 历史扫描是两个不同检查。
+
+推送前需要检查本地工作树、暂存区、拟推送的新增提交范围及相关报告/附件。无法核对拟推送历史时阻断推送准备完成状态。
+
+不要求在本轮制作完整的 GitHub 自动发布器。
+
+同时检查 CHATGPT_START.md 是否与 build_bootstrap.py 及三份源协议一致。新增可复现的一致性检查，防止以后更新 references 后忘记重新生成入口文档。
+
+Step 5 — 测试、五份记录与交付
+
+至少执行：
+
+python -B -m unittest discover -s tests -v
+
+python build_bootstrap.py 后执行入口文档一致性核对
+
+git diff --check
+
+CLI start/pack 临时项目烟雾测试
+
+插件 manifest 解析及实际插件识别测试（环境允许时）
+
+ZIP 内容完整性与 SHA-256 哈希检查
+
+每项记录实际命令、运行目录、Python 与操作系统版本、退出码、通过/失败/跳过及日志位置。
+
+维护同一个任务目录的五份记录：
+
+TASK_BRIEF.md：本轮目标、范围、验收与权限。
+
+HANDOFF.md：当前状态、分支、实际工作进度、未决事项、下一会话第一条动作。
+
+REVIEW_REPORT.md：F-001 至 F-005 的 accepted / fixed / disputed / deferred 及证据。
+
+TEST_RESULTS.md：测试命令、被测源码身份、日志和真实结果。
+
+CHATGPT_BRIEF.md：供下一个 ChatGPT 会话独立恢复任务的摘要、最新版本及未解决问题。
+
+不得覆盖已有记录，应在同一 task_id 下更新。
+
+安全与发布约束
+
+本轮允许在当前功能分支进行本地代码修改、测试与非破坏性的本地提交准备。
+
+必须对工作树、待提交内容及拟推送全部新增 commits 执行凭据扫描，不能只扫描最终快照。
+
+不得：
+
+自动推送；
+
+创建或更新远端 PR；
+
+合并、强推、amend、删除分支；
+
+修改远端仓库设置；
+
+将 ChatGPT 审查通过当作发布许可。
+
+如果发现疑似凭据，不输出凭据正文，停止可分享材料的打包并报告文件位置。
+
+即使全部测试通过，状态仍应停在本地审查阶段，直到用户明确授权对应远端操作。
+
+本轮交付与验收
+
+产出：
+
+本地代码 diff 与变更摘要。
+
+修复后的 CLI 及测试。
+
+根目录最小 plugin.json。
+
+插件识别及单 Skill 激活的真实验证记录。
+
+上述五份持久记录。
+
+一份经敏感信息检查、可独立审查的 ZIP。
+
+ZIP 完整路径、文件大小、package_id 和 SHA-256。
+
+如果可以，提供安装后的插件管理器截图；如果不能，说明限制。
+
+最终响应仅报告已完成、失败、跳过、待决定项目及 ZIP 路径。
+
+完成本轮后停止，不执行发布。
+
+五、最关键的用户决策
+
+Antigravity 今后采用哪种激活来源？
+
+推荐：Plugin 作为唯一的 Antigravity 激活来源
+
+验证插件正常后，再人工停用原有的同名全局 Skill。其他 Agent 继续独立安装原 Skill。
+
+Plugin 与原全局 Skill 同时保留
+
+方便兼容测试，但必须先证明不会重复列出或重复激活。
+
+复制安装策略决定
+
+我的推荐是第一项：一个协议源码、多种 Agent 安装方式，但在同一个 Antigravity 环境中只保留一个生效入口。
+
+进度：第 4/4 步已完成——公开 SHA 和六份文件已核实，5 项改进建议已定位，插件文档已核对，第一轮任务书已形成。未运行本地测试，也未执行任何远端写入。
+
+下一步：把任务书交给本地执行 Agent。要求它先核对 F-001 与 F-002 在未推送分支是否仍存在，再开始修改。
