@@ -156,20 +156,15 @@ def match_conversation_url(target_url: str, candidate_url: str) -> bool:
     return c_path.lower().startswith(t_path.lower())
 
 
-def build_check_user_turn_js(request_id: str) -> str:
-    """Constructs DOM JavaScript to verify existence of a genuine user turn containing request_id."""
-    escaped_req = json.dumps(request_id)
-    return f"""(() => {{
-    const main = document.querySelector('main');
-    if (!main) return JSON.stringify({{ exists: false, status: 'BLOCKED_NO_MAIN', reason: 'No <main> container in DOM' }});
-
-    function getTurnRole(el) {{
+_TURN_DETECTION_JS = """    function getTurnRole(el) {
         if (!el || el.nodeType !== 1) return null;
         const role = el.getAttribute('data-message-author-role');
         if (role === 'user') return 'user';
         if (role === 'assistant') return 'assistant';
         if (el.querySelector('[data-message-author-role="user"]')) return 'user';
         if (el.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
+
+        if (el.matches && el.matches('[data-user-message-bubble]') || el.querySelector('[data-user-message-bubble]')) return 'user';
 
         const testId = el.getAttribute('data-testid') || '';
         if (testId.includes('user')) return 'user';
@@ -180,52 +175,104 @@ def build_check_user_turn_js(request_id: str) -> str:
         if (el.classList && (el.classList.contains('group/user-message') || el.classList.contains('user-message'))) return 'user';
         if (el.querySelector('[class*="group/user-message"], [class*="user-message"]')) return 'user';
 
-        if (el.querySelector('button[aria-label="Edit message"], button[aria-label="编辑消息"], button[aria-label="编辑"], button[aria-label="Edit"], button[data-testid*="edit"]')) {{
+        if (el.querySelector('button[aria-label="Edit message"], button[aria-label="编辑消息"], button[aria-label="编辑"], button[aria-label="Edit"], button[data-testid*="edit"]')) {
             return 'user';
-        }}
-        if (el.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown, [class*="MarkdownRoot"]')) {{
+        }
+        if (el.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown, [class*="MarkdownRoot"]')) {
             return 'assistant';
-        }}
+        }
         return null;
-    }}
+    }
 
-    function findTurns(main) {{
+    function findTurns(main) {
+        const unitElements = Array.from(main.querySelectorAll('[data-chatgpt-search-unit-key]'));
+        if (unitElements.length > 0) {
+            const topUnits = [];
+            for (const el of unitElements) {
+                let hasUnitAncestor = false;
+                let p = el.parentElement || el.parentNode;
+                while (p && p !== main) {
+                    if (p.getAttribute && p.getAttribute('data-chatgpt-search-unit-key') !== null) {
+                        hasUnitAncestor = true;
+                        break;
+                    }
+                    p = p.parentElement || p.parentNode;
+                }
+                if (!hasUnitAncestor) {
+                    topUnits.push(el);
+                }
+            }
+            const unitTurns = [];
+            for (const u of topUnits) {
+                const key = u.getAttribute('data-chatgpt-search-unit-key') || '';
+                const parts = key.split(':');
+                const last = parts[parts.length - 1];
+                if (last === 'user' || last === 'assistant') {
+                    unitTurns.push({ node: u, role: last });
+                }
+            }
+            if (unitTurns.length > 0) {
+                return unitTurns;
+            }
+        }
+
         let candidates = Array.from(main.querySelectorAll('article'));
-        if (candidates.length === 0) {{
+        if (candidates.length === 0) {
             candidates = Array.from(main.querySelectorAll('[data-testid^="conversation-turn-"], [data-testid="conversation-turn"]'));
-        }}
-        if (candidates.length === 0) {{
+        }
+        if (candidates.length === 0) {
             candidates = Array.from(main.querySelectorAll('[data-message-author-role]'));
-        }}
-        if (candidates.length === 0) {{
+        }
+        if (candidates.length === 0) {
             const groups = Array.from(main.querySelectorAll('[class*="browser:gap-1"], [class*="gap-3"]'));
             let groupChildren = [];
-            for (const g of groups) {{
+            for (const g of groups) {
                 groupChildren.push(...Array.from(g.children));
-            }}
-            if (groupChildren.length > 0) {{
+            }
+            if (groupChildren.length > 0) {
                 candidates = groupChildren;
-            }}
-        }}
-        if (candidates.length === 0) {{
+            }
+        }
+        if (candidates.length === 0) {
             candidates = Array.from(main.querySelectorAll('[class*="block-"]'));
-        }}
+        }
         const valid = [];
-        for (const c of candidates) {{
+        for (const c of candidates) {
             const role = getTurnRole(c);
-            if (role) {{
-                if (valid.length > 0 && typeof valid[valid.length - 1].node.contains === 'function' && valid[valid.length - 1].node.contains(c)) {{
+            if (role) {
+                if (valid.length > 0 && typeof valid[valid.length - 1].node.contains === 'function' && valid[valid.length - 1].node.contains(c)) {
                     continue;
-                }}
-                valid.push({{ node: c, role }});
-            }}
-        }}
+                }
+                valid.push({ node: c, role });
+            }
+        }
         return valid;
-    }}
+    }"""
+
+
+def build_check_user_turn_js(request_id: str) -> str:
+    """Constructs DOM JavaScript to verify existence of a genuine user turn containing request_id."""
+    escaped_req = json.dumps(request_id)
+    return f"""(() => {{
+    const main = document.querySelector('main');
+    if (!main) return JSON.stringify({{ exists: false, status: 'BLOCKED_NO_MAIN', reason: 'No <main> container in DOM' }});
+
+{_TURN_DETECTION_JS}
 
     const turns = findTurns(main);
     if (turns.length === 0) {{
-        return JSON.stringify({{ exists: false, status: 'BLOCKED_DOM_NOT_SUPPORTED', reason: 'No recognizable conversation turn nodes in DOM' }});
+        return JSON.stringify({{
+            exists: false,
+            status: 'BLOCKED_DOM_NOT_SUPPORTED',
+            reason: 'No recognizable conversation turn nodes in DOM',
+            diag: {{
+                turns: turns.length,
+                roles: turns.map(t => t.role).join(','),
+                units: main.querySelectorAll('[data-chatgpt-search-unit-key]').length,
+                bubbles: main.querySelectorAll('[data-user-message-bubble]').length,
+                mainHasReq: main.textContent.includes({escaped_req})
+            }}
+        }});
     }}
 
     const matchedUserTurns = [];
@@ -250,7 +297,17 @@ def build_check_user_turn_js(request_id: str) -> str:
     }} else if (matchedUserTurns.length > 1) {{
         return JSON.stringify({{ exists: true, status: 'BLOCKED_AMBIGUOUS_USER_TURN', reason: 'Multiple user turns contain request_id', count: matchedUserTurns.length }});
     }} else {{
-        return JSON.stringify({{ exists: false, status: 'USER_TURN_NOT_FOUND' }});
+        return JSON.stringify({{
+            exists: false,
+            status: 'USER_TURN_NOT_FOUND',
+            diag: {{
+                turns: turns.length,
+                roles: turns.map(t => t.role).join(','),
+                units: main.querySelectorAll('[data-chatgpt-search-unit-key]').length,
+                bubbles: main.querySelectorAll('[data-user-message-bubble]').length,
+                mainHasReq: main.textContent.includes({escaped_req})
+            }}
+        }});
     }}
 }})()"""
 
@@ -275,65 +332,7 @@ def build_extract_js(request_id: str) -> str:
         main.querySelector('.result-streaming')
     );
 
-    function getTurnRole(el) {{
-        if (!el || el.nodeType !== 1) return null;
-        const role = el.getAttribute('data-message-author-role');
-        if (role === 'user') return 'user';
-        if (role === 'assistant') return 'assistant';
-        if (el.querySelector('[data-message-author-role="user"]')) return 'user';
-        if (el.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
-
-        const testId = el.getAttribute('data-testid') || '';
-        if (testId.includes('user')) return 'user';
-        if (testId.includes('assistant')) return 'assistant';
-        if (el.querySelector('[data-testid*="user"]')) return 'user';
-        if (el.querySelector('[data-testid*="assistant"]')) return 'assistant';
-
-        if (el.classList && (el.classList.contains('group/user-message') || el.classList.contains('user-message'))) return 'user';
-        if (el.querySelector('[class*="group/user-message"], [class*="user-message"]')) return 'user';
-
-        if (el.querySelector('button[aria-label="Edit message"], button[aria-label="编辑消息"], button[aria-label="编辑"], button[aria-label="Edit"], button[data-testid*="edit"]')) {{
-            return 'user';
-        }}
-        if (el.querySelector('button[aria-label="Copy"], button[aria-label="复制"], button[aria-label*="Copy"], button[aria-label*="复制"], button[data-testid*="copy"], .prose, .markdown, [class*="MarkdownRoot"]')) {{
-            return 'assistant';
-        }}
-        return null;
-    }}
-
-    function findTurns(main) {{
-        let candidates = Array.from(main.querySelectorAll('article'));
-        if (candidates.length === 0) {{
-            candidates = Array.from(main.querySelectorAll('[data-testid^="conversation-turn-"], [data-testid="conversation-turn"]'));
-        }}
-        if (candidates.length === 0) {{
-            candidates = Array.from(main.querySelectorAll('[data-message-author-role]'));
-        }}
-        if (candidates.length === 0) {{
-            const groups = Array.from(main.querySelectorAll('[class*="browser:gap-1"], [class*="gap-3"]'));
-            let groupChildren = [];
-            for (const g of groups) {{
-                groupChildren.push(...Array.from(g.children));
-            }}
-            if (groupChildren.length > 0) {{
-                candidates = groupChildren;
-            }}
-        }}
-        if (candidates.length === 0) {{
-            candidates = Array.from(main.querySelectorAll('[class*="block-"]'));
-        }}
-        const valid = [];
-        for (const c of candidates) {{
-            const role = getTurnRole(c);
-            if (role) {{
-                if (valid.length > 0 && typeof valid[valid.length - 1].node.contains === 'function' && valid[valid.length - 1].node.contains(c)) {{
-                    continue;
-                }}
-                valid.push({{ node: c, role }});
-            }}
-        }}
-        return valid;
-    }}
+{_TURN_DETECTION_JS}
 
     const turns = findTurns(main);
     if (turns.length === 0) {{
@@ -1057,10 +1056,12 @@ class BrowserRelay:
 
         # Verify delivery into formal user turn within delivery_timeout seconds with content hash verification
         start = time.time()
+        last_check: Optional[Dict[str, Any]] = None
         while time.time() - start < delivery_timeout:
             check_after = self.check_user_turn_exists(
                 session_id, request_id, expected_message_hash=expected_hash, expected_message=message
             )
+            last_check = check_after
             if check_after.get("exists"):
                 if expected_hash and not check_after.get("hash_matches"):
                     raise DeliveryError(
@@ -1070,8 +1071,9 @@ class BrowserRelay:
                 return True
             time.sleep(0.5 if delivery_timeout > 1 else 0.01)
 
+        diag_str = json.dumps(last_check.get("diag")) if last_check and last_check.get("diag") is not None else "none"
         raise DeliveryError(
-            f"Message with request_id={request_id} was submitted but failed verification as a formal user turn in conversation."
+            f"Message with request_id={request_id} was submitted but failed verification as a formal user turn in conversation. diag={diag_str}"
         )
 
     def extract_response_for_request(
@@ -1345,8 +1347,9 @@ class BrowserRelay:
                     session_id, request_id, expected_message_hash=msg_hash, expected_message=message
                 )
                 if not user_turn_info.get("exists"):
+                    diag_str = json.dumps(user_turn_info.get("diag")) if user_turn_info.get("diag") is not None else "none"
                     journal_entry["status"] = "BLOCKED_DELIVERY_UNCONFIRMED"
-                    journal_entry["error"] = f"Recovery check failed: user turn '{request_id}' not found in DOM ({user_turn_info.get('status')})"
+                    journal_entry["error"] = f"Recovery check failed: user turn '{request_id}' not found in DOM ({user_turn_info.get('status')}) diag={diag_str}"
                     journal_entry["manual_fallback_required"] = True
                     return journal_entry
                 if msg_hash and not user_turn_info.get("hash_matches"):

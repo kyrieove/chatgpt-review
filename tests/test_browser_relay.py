@@ -974,6 +974,101 @@ class BrowserRelayTests(unittest.TestCase):
             self.assertEqual(res["status"], "BLOCKED_NO_BROWSER")
             self.assertIs(res.get("send_clicked"), False)
 
+    def _build_new_layout_dom(self):
+        return {
+            "tag": "main",
+            "children": [
+                {
+                    "tag": "div",
+                    "attrs": {},
+                    "children": [
+                        {
+                            "tag": "div",
+                            "attrs": {"data-chatgpt-search-unit-key": "fallback-turn-0:0:user"},
+                            "children": [
+                                {
+                                    "tag": "div",
+                                    "attrs": {"data-user-message-bubble": "true"},
+                                    "children": [
+                                        {
+                                            "tag": "div",
+                                            "attrs": {"data-markdown-text-tone": "user-message"},
+                                            "text": "你好",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "tag": "div",
+                            "attrs": {"data-chatgpt-search-unit-key": "fallback-turn-0:2:assistant"},
+                            "children": [
+                                {
+                                    "tag": "div",
+                                    "attrs": {"class": "prose"},
+                                    "text": "你好！有什么我可以帮你的？",
+                                }
+                            ],
+                        },
+                        {
+                            "tag": "div",
+                            "attrs": {"data-chatgpt-search-unit-key": "fallback-turn-0:3:user"},
+                            "children": [
+                                {
+                                    "tag": "div",
+                                    "attrs": {"data-user-message-bubble": "true"},
+                                    "children": [
+                                        {
+                                            "tag": "div",
+                                            "attrs": {"data-markdown-text-tone": "user-message"},
+                                            "text": "# Plan [req-X]\n详细计划内容",
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
+                        {
+                            "tag": "div",
+                            "attrs": {"data-chatgpt-search-unit-key": "fallback-turn-0:4:assistant"},
+                            "children": [
+                                {
+                                    "tag": "div",
+                                    "attrs": {"class": "prose"},
+                                    "text": "answer for X",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            ],
+        }
+
+    def test_dom_new_layout_user_turn_found_by_unit_key(self):
+        dom = self._build_new_layout_dom()
+        js = build_check_user_turn_js("req-X")
+        res = self.run_in_dom(dom, js)
+        self.assertTrue(res.get("exists"))
+        self.assertIn("req-X", res.get("userText", ""))
+
+    def test_dom_new_layout_extract_assistant_after_user(self):
+        dom = self._build_new_layout_dom()
+        js = build_extract_js("req-X")
+        res = self.run_in_dom(dom, js)
+        self.assertEqual(res.get("status"), "OK")
+        self.assertEqual(res.get("text"), "answer for X")
+
+    def test_dom_not_found_returns_diag(self):
+        dom = self._build_new_layout_dom()
+        js = build_check_user_turn_js("req-Y")
+        res = self.run_in_dom(dom, js)
+        self.assertFalse(res.get("exists"))
+        self.assertEqual(res.get("status"), "USER_TURN_NOT_FOUND")
+        diag = res.get("diag")
+        self.assertIsNotNone(diag)
+        self.assertEqual(diag.get("units"), 4)
+        self.assertEqual(diag.get("bubbles"), 2)
+        self.assertIs(diag.get("mainHasReq"), False)
+
 
 if __name__ == "__main__":
     unittest.main()

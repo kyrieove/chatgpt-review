@@ -117,6 +117,17 @@ class DOMNode {
         return matchSelector(this, selector);
     }
 
+    closest(selector) {
+        let curr = this;
+        while (curr) {
+            if (curr.nodeType === 1 && matchSelector(curr, selector)) {
+                return curr;
+            }
+            curr = curr.parentNode;
+        }
+        return null;
+    }
+
     querySelector(selector) {
         const results = this.querySelectorAll(selector);
         return results.length > 0 ? results[0] : null;
