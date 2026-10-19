@@ -25,12 +25,22 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from .browser_relay import BrowserRelay, normalize_model_identifier, validate_chatgpt_origin
+    from .browser_relay import (
+        BrowserRelay,
+        normalize_model_identifier,
+        validate_chatgpt_origin,
+        validate_conversation_url,
+    )
     from .relay import POINTER_MARKER, project_root, start_task
 except ImportError:
     SCRIPT_DIR = Path(__file__).resolve().parent
     sys.path.insert(0, str(SCRIPT_DIR))
-    from browser_relay import BrowserRelay, normalize_model_identifier, validate_chatgpt_origin
+    from browser_relay import (
+        BrowserRelay,
+        normalize_model_identifier,
+        validate_chatgpt_origin,
+        validate_conversation_url,
+    )
     from relay import POINTER_MARKER, project_root, start_task
 
 # State Machine Stages
@@ -839,6 +849,8 @@ def start_workflow(
     pr_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Initializes task files and persistent workflow state bound to current git HEAD."""
+    if chat_url and not validate_conversation_url(chat_url):
+        raise WorkflowError(f"Invalid ChatGPT conversation URL: {chat_url}")
     root = project_root(project)
     head_sha = get_git_head_sha(root)
 
@@ -914,6 +926,7 @@ VALID_DELIVERY_STATUSES = {
     "SENT_UNCONFIRMED",
     "DELIVERY_UNKNOWN",
     "CONFIRMED_USER_TURN",
+    "NOT_SENT",
 }
 
 
@@ -1445,7 +1458,10 @@ def execute_exchange(
 ) -> Dict[str, Any]:
     """Prepares and executes a formal round exchange with ChatGPT under task file lock."""
     with TaskLock(task_dir):
+        pending_switch = False
         state = load_state(task_dir)
+        if chat_url and not validate_conversation_url(chat_url):
+            raise WorkflowError(f"Invalid ChatGPT conversation URL: {chat_url}")
         stage = state.get("stage")
         root = project_root(task_dir.parent.parent)
 
@@ -1540,8 +1556,20 @@ def execute_exchange(
             expected_head_sha = active_tx["head_sha"]
             message = active_tx["message"]
             req_hash = active_tx["message_hash"]
-            target_chat_url = active_tx.get("chat_url") or chat_url or state.get("chat_url")
-            target_tab_id = active_tx.get("tab_id") or target_tab_id
+            tx_chat_url = active_tx.get("chat_url")
+            if chat_url and tx_chat_url and chat_url != tx_chat_url:
+                if active_tx.get("delivery_status") == "NOT_SENT":
+                    pending_switch = True
+                    target_chat_url = chat_url
+                    target_tab_id = target_tab_id
+                else:
+                    raise WorkflowError(
+                        f"Cannot switch chat URL for transaction '{req_id}': transaction chat_url is '{tx_chat_url}', "
+                        f"requested new chat_url is '{chat_url}'. Message may have been delivered to previous chat; refusing to switch."
+                    )
+            else:
+                target_chat_url = active_tx.get("chat_url") or chat_url or state.get("chat_url")
+                target_tab_id = active_tx.get("tab_id") or target_tab_id
             req_model = active_tx.get("model") or expected_model or state.get("model")
             req_thinking = active_tx.get("thinking_mode") or expected_thinking or state.get("thinking_mode")
         else:
@@ -1558,8 +1586,6 @@ def execute_exchange(
             req_thinking = expected_thinking or state.get("thinking_mode")
 
         if dry_run:
-            if chat_url and not validate_chatgpt_origin(chat_url):
-                raise WorkflowError(f"Invalid ChatGPT origin URL: {chat_url}")
             return {
                 "status": "DRY_RUN",
                 "request_id": req_id,
@@ -1606,6 +1632,13 @@ def execute_exchange(
             }
             state["active_transaction"] = active_tx
             save_state(task_dir, state)
+        elif pending_switch:
+            update_chat_url(task_dir, chat_url)
+            state = load_state(task_dir)
+            active_tx = state["active_transaction"]
+            active_tx["chat_url"] = chat_url
+            active_tx["tab_id"] = target_tab_id
+            save_state(task_dir, state)
         elif chat_url and not active_tx.get("chat_url"):
             update_chat_url(task_dir, chat_url)
             state = load_state(task_dir)
@@ -1621,8 +1654,11 @@ def execute_exchange(
         # Determine skip_send: unknown delivery recovery queries DOM without re-sending
         skip_send = False
         if is_recovery:
-            if active_tx.get("delivery_status") in VALID_DELIVERY_STATUSES:
+            if active_tx.get("delivery_status") != "NOT_SENT":
                 skip_send = True
+            else:
+                active_tx["delivery_status"] = "SEND_ATTEMPTED"
+                save_state(task_dir, state)
         else:
             active_tx["delivery_status"] = "SEND_ATTEMPTED"
             save_state(task_dir, state)
@@ -1678,7 +1714,10 @@ def execute_exchange(
 
             if res.get("status") != "SUCCESS":
                 if active_tx.get("delivery_status") != "CONFIRMED_USER_TURN":
-                    active_tx["delivery_status"] = "DELIVERY_UNKNOWN"
+                    if res.get("send_clicked") is False and not skip_send:
+                        active_tx["delivery_status"] = "NOT_SENT"
+                    else:
+                        active_tx["delivery_status"] = "DELIVERY_UNKNOWN"
                 state["stage"] = STAGE_BLOCKED
                 state["blocked_from_stage"] = state.get("business_stage")
                 err_msg = res.get("error") or res.get("status") or "Browser exchange failed"
@@ -1768,6 +1807,8 @@ def resume_workflow(
         state = load_state(task_dir)
 
         if chat_url and chat_url != state.get("chat_url"):
+            if not validate_conversation_url(chat_url):
+                raise WorkflowError(f"Invalid ChatGPT conversation URL: {chat_url}")
             update_chat_url(task_dir, chat_url)
             state = load_state(task_dir)
 

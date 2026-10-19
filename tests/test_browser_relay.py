@@ -19,12 +19,14 @@ BrowserRelay = browser_relay.BrowserRelay
 BrowserRelayError = browser_relay.BrowserRelayError
 ConversationMismatchError = browser_relay.ConversationMismatchError
 DeliveryError = browser_relay.DeliveryError
+NotSentError = browser_relay.NotSentError
 TabInfo = browser_relay.TabInfo
 TabNotFoundError = browser_relay.TabNotFoundError
 build_check_user_turn_js = browser_relay.build_check_user_turn_js
 build_extract_js = browser_relay.build_extract_js
 build_check_model_and_thinking_js = browser_relay.build_check_model_and_thinking_js
 validate_chatgpt_origin = browser_relay.validate_chatgpt_origin
+validate_conversation_url = browser_relay.validate_conversation_url
 
 
 class BrowserRelayTests(unittest.TestCase):
@@ -42,7 +44,11 @@ class BrowserRelayTests(unittest.TestCase):
             capture_output=True,
             check=True,
         )
-        return json.loads(proc.stdout)
+        out = proc.stdout.strip()
+        try:
+            return json.loads(out)
+        except Exception:
+            return out
 
     def test_check_status_parses_running_daemon(self):
         status_json = json.dumps({
@@ -816,6 +822,157 @@ class BrowserRelayTests(unittest.TestCase):
             self.assertIn("Model mismatch", result["error"])
             mock_return.assert_called_once()
             mock_stop.assert_called_once()
+
+    def test_validate_conversation_url(self):
+        """test_validate_conversation_url: 两个合法样例返回 True；占位地址、https://chatgpt.com/、http 协议返回 False。"""
+        valid_custom = "https://chatgpt.com/g/g-p-68d1848f372081918ae13ad310a7fff8-ove-phd/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c"
+        valid_direct = "https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c"
+        placeholder = "https://chatgpt.com/c/<问候交流的ID>"
+        root_url = "https://chatgpt.com/"
+        http_url = "http://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c"
+
+        self.assertTrue(validate_conversation_url(valid_custom))
+        self.assertTrue(validate_conversation_url(valid_direct))
+        self.assertFalse(validate_conversation_url(placeholder))
+        self.assertFalse(validate_conversation_url(root_url))
+        self.assertFalse(validate_conversation_url(http_url))
+
+    def test_inject_empty_then_verify_ok_continues_send(self):
+        """test_inject_empty_then_verify_ok_continues_send: mock evaluate，注入返回 INJECT_EMPTY:{}，补查返回 OK，之后按原流程成功，断言点击被执行。"""
+        with mock.patch.object(self.relay, "check_user_turn_exists") as mock_check, \
+             mock.patch.object(self.relay, "evaluate") as mock_eval:
+            # First check_user_turn_exists before send: not found
+            # Second check_user_turn_exists after send: exists with hash match
+            msg = "test message with [REQ-INJECT-OK]"
+            msg_hash = hashlib.sha256(msg.strip().encode("utf-8")).hexdigest()
+            mock_check.side_effect = [
+                {"exists": False, "status": "USER_TURN_NOT_FOUND"},
+                {"exists": True, "status": "OK", "hash_matches": True, "user_text_hash": msg_hash},
+            ]
+
+            eval_results = [
+                'INJECT_EMPTY:{"candidates":[],"chosen":null,"active":null}',  # inject_js result
+                "OK",  # verify_read_js result
+                "CLICKED",  # click_js result
+            ]
+            mock_eval.side_effect = eval_results
+
+            res = self.relay.send_prompt(
+                "sess-1", msg, "[REQ-INJECT-OK]"
+            )
+            self.assertTrue(res)
+            # Verify click_js was called (at least 3 evaluate calls)
+            self.assertGreaterEqual(mock_eval.call_count, 3)
+            # Find the evaluate call with click logic
+            clicked_calls = [c for c in mock_eval.call_args_list if "send-button" in str(c)]
+            self.assertGreaterEqual(len(clicked_calls), 1)
+
+    def test_inject_not_confirmed_raises_not_sent_and_journal_send_clicked_false(self):
+        """test_inject_not_confirmed_raises_not_sent_and_journal_send_clicked_false: 注入和补查都失败，send_prompt 抛 NotSentError；经 run_e2e_review 时，journal 的 send_clicked 为 False。"""
+        with mock.patch.object(self.relay, "check_user_turn_exists") as mock_check, \
+             mock.patch.object(self.relay, "evaluate") as mock_eval:
+            mock_check.return_value = {"exists": False, "status": "USER_TURN_NOT_FOUND"}
+            mock_eval.side_effect = [
+                'INJECT_EMPTY:{"candidates":[],"chosen":null,"active":null}',  # inject_js
+                "MISSING",  # verify_read_js
+                "",  # clear_js
+            ]
+
+            with self.assertRaises(NotSentError):
+                self.relay.send_prompt(
+                    "sess-1", "msg [REQ-FAIL]", "[REQ-FAIL]"
+                )
+
+        with mock.patch.object(self.relay, "check_status") as mock_status, \
+             mock.patch.object(self.relay, "start_session") as mock_start, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
+             mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "check_model_and_thinking") as mock_model, \
+             mock.patch.object(self.relay, "send_prompt") as mock_send, \
+             mock.patch.object(self.relay, "return_tab") as mock_return, \
+             mock.patch.object(self.relay, "stop_session") as mock_stop:
+
+            mock_status.return_value = browser_relay.BrowserStatus(daemon_running=True, connected_browser_id="b-1")
+            mock_start.return_value = "sess-1"
+            mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c")
+            mock_borrow.return_value = True
+            mock_url.return_value = "https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c"
+            mock_model.return_value = {"verified": True, "status": "OK", "model": "o1", "thinking_mode": "high"}
+            mock_send.side_effect = NotSentError("Prompt injection not confirmed: INJECT_EMPTY")
+            mock_return.return_value = True
+            mock_stop.return_value = True
+
+            result = self.relay.run_e2e_review(
+                task_id="task-1",
+                message="msg [REQ-FAIL]",
+                request_id="[REQ-FAIL]",
+                target_url_prefix="https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c",
+            )
+            self.assertEqual(result["status"], "BLOCKED_DELIVERY_UNCONFIRMED")
+            self.assertFalse(result.get("send_clicked"))
+
+    def test_dom_inject_prefers_visible_contenteditable(self):
+        """node DOM 测试 test_dom_inject_prefers_visible_contenteditable: 捕获生产代码的注入 JS，构造隐藏的 #prompt-textarea 和可见的 contenteditable，执行断言返回 'OK' 且文字写入可见元素。"""
+        req_id = "REQ-VISIBLE-TEST"
+        msg = f"hello [{req_id}]"
+
+        class _Captured(Exception):
+            def __init__(self, js: str):
+                self.js = js
+
+        relay = BrowserRelay()
+        with mock.patch.object(relay, "check_user_turn_exists") as mock_check, \
+             mock.patch.object(relay, "evaluate") as mock_eval:
+            mock_check.return_value = {"status": "USER_TURN_NOT_FOUND", "exists": False}
+
+            def _eval_side_effect(session_id, js):
+                raise _Captured(js)
+
+            mock_eval.side_effect = _eval_side_effect
+            with self.assertRaises(_Captured) as ctx:
+                relay.send_prompt("sess-1", msg, req_id)
+            captured_js = ctx.exception.js
+
+        dom = {
+            "tag": "form",
+            "children": [
+                {
+                    "tag": "textarea",
+                    "attrs": {"id": "prompt-textarea", "data-hidden": "true"},
+                    "text": "",
+                },
+                {
+                    "tag": "div",
+                    "attrs": {"contenteditable": "true", "id": "visible-editor"},
+                    "text": "",
+                },
+            ],
+        }
+        wrapped_js = f"""(() => {{
+            const res = ({captured_js});
+            return {{
+                "status": res,
+                "visibleText": document.querySelector('#visible-editor').innerText,
+                "hiddenValue": document.querySelector('#prompt-textarea').value || ''
+            }};
+        }})()"""
+        res = self.run_in_dom(dom, wrapped_js)
+        self.assertEqual(res["status"], "OK")
+        self.assertIn(req_id, res["visibleText"])
+        self.assertNotIn(req_id, res["hiddenValue"])
+
+    def test_no_browser_journal_has_send_clicked_false(self):
+        """test_no_browser_journal_has_send_clicked_false: mock check_status 返回 daemon 未运行，run_e2e_review 的 journal 里 send_clicked is False。"""
+        with mock.patch.object(self.relay, "check_status") as mock_status:
+            mock_status.return_value = browser_relay.BrowserStatus(daemon_running=False, connected_browser_id=None, error="bsk daemon not running")
+            res = self.relay.run_e2e_review(
+                task_id="task-no-browser",
+                message="test [REQ-NO-BROWSER]",
+                request_id="REQ-NO-BROWSER",
+            )
+            self.assertEqual(res["status"], "BLOCKED_NO_BROWSER")
+            self.assertIs(res.get("send_clicked"), False)
 
 
 if __name__ == "__main__":

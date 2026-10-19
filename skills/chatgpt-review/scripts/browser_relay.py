@@ -51,6 +51,10 @@ class DeliveryError(BrowserRelayError):
     """Raised when message delivery could not be confirmed in a formal user turn."""
 
 
+class NotSentError(DeliveryError):
+    """Raised when message was not sent or injection could not be confirmed."""
+
+
 class ResponseIncompleteError(BrowserRelayError):
     """Raised when assistant response is incomplete, still streaming, or unparseable."""
 
@@ -71,6 +75,22 @@ def validate_chatgpt_origin(url: Optional[str]) -> bool:
     if parsed.port is not None and parsed.port != 443:
         return False
     return True
+
+
+CONVERSATION_PATH_PATTERN = re.compile(
+    r"^(/g/[A-Za-z0-9_-]+)?/c/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/?$"
+)
+
+
+def validate_conversation_url(url: Optional[str]) -> bool:
+    """Validates that a URL is a legitimate ChatGPT URL with a valid conversation UUID path."""
+    if not validate_chatgpt_origin(url):
+        return False
+    try:
+        parsed = urllib.parse.urlparse(url.strip())
+        return bool(CONVERSATION_PATH_PATTERN.match(parsed.path))
+    except Exception:
+        return False
 
 
 def normalize_model_identifier(name: Optional[str]) -> str:
@@ -483,6 +503,7 @@ class BrowserRelay:
 
     def __init__(self, bsk_executable: Optional[str] = None):
         self.bsk = bsk_executable or shutil.which("bsk") or "bsk"
+        self._send_clicked = False
 
     def _run_bsk(self, *args: str, timeout: Optional[int] = None) -> subprocess.CompletedProcess[str]:
         cmd = [self.bsk, *args]
@@ -757,14 +778,53 @@ class BrowserRelay:
                 )
 
         encoded_msg = json.dumps(message)
+        encoded_req_id = json.dumps(request_id)
         inject_js = f"""(() => {{
-    const el = document.querySelector('form #prompt-textarea') ||
-               document.querySelector('#prompt-textarea') ||
-               document.querySelector('form div[contenteditable="true"]') ||
-               document.querySelector('form textarea') ||
-               document.querySelector('div[contenteditable="true"]') ||
-               document.querySelector('textarea');
-    if (!el) return 'NO_INPUT';
+    const selectors = [
+        'form #prompt-textarea',
+        '#prompt-textarea',
+        'form div[contenteditable="true"]',
+        'form textarea',
+        'div[contenteditable="true"]',
+        'textarea'
+    ];
+    const candidateList = [];
+    const seen = new Set();
+    for (const sel of selectors) {{
+        const nodes = document.querySelectorAll(sel);
+        for (let i = 0; i < nodes.length; i++) {{
+            const n = nodes[i];
+            if (!seen.has(n)) {{
+                seen.add(n);
+                candidateList.push(n);
+            }}
+        }}
+    }}
+    if (candidateList.length === 0) return 'NO_INPUT';
+
+    function isVisible(n) {{
+        return n.getClientRects ? n.getClientRects().length > 0 : true;
+    }}
+
+    let el = null;
+    for (const n of candidateList) {{
+        if (isVisible(n) && n.getAttribute('contenteditable') === 'true') {{
+            el = n;
+            break;
+        }}
+    }}
+    if (!el) {{
+        for (const n of candidateList) {{
+            if (isVisible(n)) {{
+                el = n;
+                break;
+            }}
+        }}
+    }}
+    if (!el) {{
+        el = candidateList[0];
+    }}
+
     if (el.tagName.toLowerCase() === 'textarea') {{
         el.value = {encoded_msg};
         el.dispatchEvent(new Event('input', {{ bubbles: true }}));
@@ -784,14 +844,146 @@ class BrowserRelay:
         }}
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }}
-    if ((el.innerText || el.value || '').trim().length === 0) {{
-        return 'INJECT_EMPTY';
+
+    const reqId = {encoded_req_id};
+    const elText = el.innerText || el.value || '';
+    const active = document.activeElement;
+    const activeText = active ? (active.innerText || active.value || '') : '';
+    if (elText.includes(reqId) || activeText.includes(reqId)) {{
+        return 'OK';
     }}
-    return 'OK';
+
+    const candidatesDiag = candidateList.map(n => ({{
+        tag: (n.tagName || '').toLowerCase(),
+        id: n.id || '',
+        ce: n.getAttribute('contenteditable'),
+        visible: isVisible(n)
+    }}));
+    const chosenDiag = {{
+        tag: (el.tagName || '').toLowerCase(),
+        id: el.id || '',
+        ce: el.getAttribute('contenteditable'),
+        visible: isVisible(el)
+    }};
+    const activeDiag = active ? {{
+        tag: (active.tagName || '').toLowerCase(),
+        id: active.id || ''
+    }} : null;
+
+    return 'INJECT_EMPTY:' + JSON.stringify({{
+        candidates: candidatesDiag,
+        chosen: chosenDiag,
+        active: activeDiag
+    }});
 }})()"""
         res = self.evaluate(session_id, inject_js)
+        if res == "NO_INPUT":
+            raise NotSentError("Could not locate prompt input element on ChatGPT page: NO_INPUT")
         if res != "OK":
-            raise DeliveryError(f"Could not locate prompt input element on ChatGPT page: {res}")
+            if isinstance(res, str) and res.startswith("INJECT_EMPTY"):
+                time.sleep(0.5)
+                verify_read_js = f"""(() => {{
+    const selectors = [
+        'form #prompt-textarea',
+        '#prompt-textarea',
+        'form div[contenteditable="true"]',
+        'form textarea',
+        'div[contenteditable="true"]',
+        'textarea'
+    ];
+    const candidateList = [];
+    const seen = new Set();
+    for (const sel of selectors) {{
+        const nodes = document.querySelectorAll(sel);
+        for (let i = 0; i < nodes.length; i++) {{
+            const n = nodes[i];
+            if (!seen.has(n)) {{
+                seen.add(n);
+                candidateList.push(n);
+            }}
+        }}
+    }}
+    if (candidateList.length === 0) return 'MISSING';
+
+    function isVisible(n) {{
+        return n.getClientRects ? n.getClientRects().length > 0 : true;
+    }}
+
+    let el = null;
+    for (const n of candidateList) {{
+        if (isVisible(n) && n.getAttribute('contenteditable') === 'true') {{
+            el = n;
+            break;
+        }}
+    }}
+    if (!el) {{
+        for (const n of candidateList) {{
+            if (isVisible(n)) {{
+                el = n;
+                break;
+            }}
+        }}
+    }}
+    if (!el) {{
+        el = candidateList[0];
+    }}
+
+    const reqId = {encoded_req_id};
+    const elText = el.innerText || el.value || '';
+    const active = document.activeElement;
+    const activeText = active ? (active.innerText || active.value || '') : '';
+    if (elText.includes(reqId) || activeText.includes(reqId)) {{
+        return 'OK';
+    }}
+    return 'MISSING';
+}})()"""
+                verify_res = self.evaluate(session_id, verify_read_js)
+                if verify_res != "OK":
+                    clear_js = """(() => {
+    try {
+        const selectors = [
+            'form #prompt-textarea',
+            '#prompt-textarea',
+            'form div[contenteditable="true"]',
+            'form textarea',
+            'div[contenteditable="true"]',
+            'textarea'
+        ];
+        let el = null;
+        for (const sel of selectors) {
+            const nodes = document.querySelectorAll(sel);
+            for (let i = 0; i < nodes.length; i++) {
+                const n = nodes[i];
+                const isVis = n.getClientRects ? n.getClientRects().length > 0 : true;
+                if (isVis && n.getAttribute('contenteditable') === 'true') {
+                    el = n;
+                    break;
+                }
+            }
+            if (el) break;
+        }
+        if (!el) {
+            el = document.activeElement;
+        }
+        if (el) {
+            if (typeof el.focus === 'function') el.focus();
+            if (typeof document.execCommand === 'function') {
+                document.execCommand('selectAll', false, null);
+                document.execCommand('delete', false, null);
+            }
+            if (el.tagName && el.tagName.toLowerCase() === 'textarea') {
+                el.value = '';
+            }
+        }
+    } catch (e) {}
+})()"""
+                    try:
+                        self.evaluate(session_id, clear_js)
+                    except Exception:
+                        pass
+                    raise NotSentError(f"Prompt injection not confirmed: {res}")
+            else:
+                raise NotSentError(f"Prompt injection not confirmed: {res}")
 
         # Settle delay for ProseMirror and React DOM state updates
         time.sleep(0.5)
@@ -838,6 +1030,7 @@ class BrowserRelay:
     }
     return 'WAITING_BUTTON';
 })()"""
+        self._send_clicked = True
         send_res = "NO_SEND_ACTION"
         click_start = time.time()
         while time.time() - click_start < 6.0:
@@ -1076,6 +1269,7 @@ class BrowserRelay:
             "target_tab_id": target_tab_id,
             "target_url_prefix": target_url_prefix,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "send_clicked": False,
         }
 
         cleanup_info: Dict[str, Any] = {
@@ -1093,6 +1287,7 @@ class BrowserRelay:
 
         session_id = self.start_session(status.connected_browser_id, task_id)
         borrowed_tab_id: Optional[str] = None
+        self._send_clicked = False
         try:
             target_tab = self.find_target_tab(
                 session_id, target_tab_id=target_tab_id, target_url_prefix=target_url_prefix
@@ -1236,6 +1431,7 @@ class BrowserRelay:
             journal_entry["manual_fallback_required"] = True
             return journal_entry
         finally:
+            journal_entry["send_clicked"] = bool(self._send_clicked)
             if borrowed_tab_id:
                 try:
                     res_tab = self.return_tab(session_id, borrowed_tab_id)

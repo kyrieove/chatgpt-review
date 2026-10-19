@@ -63,12 +63,14 @@ class WorkflowTests(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def _start_task(self, task_id="test-task-1", title="Test Task", model=None):
+    def _start_task(self, task_id="test-task-1", title="Test Task", model=None, chat_url=None, repo_url=None):
         return workflow.start_workflow(
             project=self.project_dir,
             title=title,
             task_id=task_id,
             model=model,
+            chat_url=chat_url,
+            repo_url=repo_url,
         )
 
     def _make_evidence(self, sha=None, cmd="python -m unittest discover", exit_code=0):
@@ -131,7 +133,7 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": msg,
             "message_hash": req_hash,
-            "chat_url": "https://chatgpt.com/c/dedup-chat",
+            "chat_url": "https://chatgpt.com/c/28515595-c114-5c01-9242-6a6b25202d69",
             "delivery_status": "CONFIRMED_USER_TURN",
             "created_at": workflow.iso_now(),
             "applied": False,
@@ -159,12 +161,12 @@ class WorkflowTests(unittest.TestCase):
             instance.run_e2e_review.return_value = {
                 "status": "SUCCESS",
                 "response_text": plan_resp,
-                "chat_url": "https://chatgpt.com/c/dedup-chat",
+                "chat_url": "https://chatgpt.com/c/28515595-c114-5c01-9242-6a6b25202d69",
                 "tab_id": "tab-1",
             }
             res = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/dedup-chat",
+                chat_url="https://chatgpt.com/c/28515595-c114-5c01-9242-6a6b25202d69",
             )
             self.assertEqual(res["status"], "SUCCESS")
             call_kwargs = instance.run_e2e_review.call_args.kwargs
@@ -183,7 +185,7 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": msg,
             "message_hash": diff_hash,
-            "chat_url": "https://chatgpt.com/c/dedup-chat",
+            "chat_url": "https://chatgpt.com/c/28515595-c114-5c01-9242-6a6b25202d69",
             "delivery_status": "CONFIRMED_USER_TURN",
             "created_at": workflow.iso_now(),
             "applied": False,
@@ -193,7 +195,7 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(workflow.DeliveryError):
             workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/dedup-chat",
+                chat_url="https://chatgpt.com/c/28515595-c114-5c01-9242-6a6b25202d69",
                 _test_transport_response="{}",
             )
 
@@ -216,7 +218,7 @@ class WorkflowTests(unittest.TestCase):
             }
             res = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/delivery-test",
+                chat_url="https://chatgpt.com/c/619c8d87-6fdb-5bbb-b8f5-9d94e6871b0f",
             )
             self.assertEqual(res["status"], "BLOCKED")
             self.assertIn("Message not confirmed in DOM", res["error"])
@@ -252,12 +254,12 @@ class WorkflowTests(unittest.TestCase):
             rec_instance.run_e2e_review.return_value = {
                 "status": "SUCCESS",
                 "response_text": plan_resp,
-                "chat_url": "https://chatgpt.com/c/delivery-test",
+                "chat_url": "https://chatgpt.com/c/619c8d87-6fdb-5bbb-b8f5-9d94e6871b0f",
                 "tab_id": "tab-1",
             }
             rec_res = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/delivery-test",
+                chat_url="https://chatgpt.com/c/619c8d87-6fdb-5bbb-b8f5-9d94e6871b0f",
             )
             self.assertEqual(rec_res["status"], "SUCCESS")
             self.assertEqual(rec_res["decision"], "PLAN_READY")
@@ -539,7 +541,7 @@ class WorkflowTests(unittest.TestCase):
             }
             res = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/model-test",
+                chat_url="https://chatgpt.com/c/19216624-6ddf-5f92-826e-6dc732a79038",
                 expected_model="gpt-5 pro",
                 expected_thinking="high",
             )
@@ -572,7 +574,7 @@ class WorkflowTests(unittest.TestCase):
             }
             res = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/login-test",
+                chat_url="https://chatgpt.com/c/1570435b-86ee-5e66-bd73-7c5ece744fa2",
             )
             self.assertEqual(res["status"], "BLOCKED")
             loaded = workflow.load_state(task_dir)
@@ -583,21 +585,21 @@ class WorkflowTests(unittest.TestCase):
         state = self._start_task(task_id="cross-task")
         task_dir = self.project_dir / "handoffs" / "cross-task"
 
-        workflow.update_chat_url(task_dir, "https://chatgpt.com/c/old-chat-1")
+        workflow.update_chat_url(task_dir, "https://chatgpt.com/c/af80494a-c5a5-5883-aa24-d4ae27872dff")
         loaded = workflow.load_state(task_dir)
-        self.assertEqual(loaded["chat_url"], "https://chatgpt.com/c/old-chat-1")
+        self.assertEqual(loaded["chat_url"], "https://chatgpt.com/c/af80494a-c5a5-5883-aa24-d4ae27872dff")
         self.assertEqual(loaded["previous_chat_urls"], [])
 
         brief = workflow.resume_workflow(
             project=self.project_dir,
             task_id="cross-task",
-            chat_url="https://chatgpt.com/c/new-chat-2",
+            chat_url="https://chatgpt.com/c/c331bab1-60e6-5daf-b470-25d266574e65",
         )
         loaded = workflow.load_state(task_dir)
-        self.assertEqual(loaded["chat_url"], "https://chatgpt.com/c/new-chat-2")
-        self.assertEqual(loaded["previous_chat_urls"], ["https://chatgpt.com/c/old-chat-1"])
+        self.assertEqual(loaded["chat_url"], "https://chatgpt.com/c/c331bab1-60e6-5daf-b470-25d266574e65")
+        self.assertEqual(loaded["previous_chat_urls"], ["https://chatgpt.com/c/af80494a-c5a5-5883-aa24-d4ae27872dff"])
         self.assertIn("cross-task", brief)
-        self.assertIn("old-chat-1", brief)
+        self.assertIn("af80494a-c5a5-5883-aa24-d4ae27872dff", brief)
         # Brief must be stored in state for subsequent prompts
         self.assertEqual(loaded["continuation_brief"], brief)
 
@@ -1221,12 +1223,12 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": "test plan",
             "message_hash": workflow.compute_hash("test plan"),
-            "chat_url": "https://chatgpt.com/c/chat-67890",
+            "chat_url": "https://chatgpt.com/c/d03a95f1-1647-5ebc-9888-da392cb6c635",
             "delivery_status": "CONFIRMED_USER_TURN",
             "created_at": workflow.iso_now(),
             "applied": False,
         }
-        st["chat_url"] = "https://chatgpt.com/c/chat-67890"
+        st["chat_url"] = "https://chatgpt.com/c/d03a95f1-1647-5ebc-9888-da392cb6c635"
         st["stage"] = workflow.STAGE_BLOCKED
         st["blocked_from_stage"] = workflow.STAGE_WAITING_PLAN
         workflow.save_state(task_dir, st)
@@ -1246,7 +1248,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(res["decision"], "PLAN_READY")
 
         updated = workflow.load_state(task_dir)
-        self.assertEqual(updated["chat_url"], "https://chatgpt.com/c/chat-67890")
+        self.assertEqual(updated["chat_url"], "https://chatgpt.com/c/d03a95f1-1647-5ebc-9888-da392cb6c635")
         self.assertEqual(updated["stage"], workflow.STAGE_WAITING_EXECUTION)
 
     def test_blocked_materials_when_no_repo_or_pr_url(self):
@@ -1306,12 +1308,12 @@ class WorkflowTests(unittest.TestCase):
             instance.run_e2e_review.return_value = {
                 "status": "SUCCESS",
                 "response_text": plan_resp,
-                "chat_url": "https://chatgpt.com/c/dry-run-formal",
+                "chat_url": "https://chatgpt.com/c/4bb93d93-5241-5fb4-8d05-e37a6409a553",
                 "tab_id": "tab-1",
             }
             formal = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/dry-run-formal",
+                chat_url="https://chatgpt.com/c/4bb93d93-5241-5fb4-8d05-e37a6409a553",
             )
             self.assertEqual(formal["status"], "SUCCESS")
             self.assertEqual(formal["decision"], "PLAN_READY")
@@ -1344,7 +1346,7 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": msg,
             "message_hash": req_hash,
-            "chat_url": "https://chatgpt.com/c/tx-test",
+            "chat_url": "https://chatgpt.com/c/2e9e1350-2a21-533f-b2b5-82a6d31435c4",
             "delivery_status": "DELIVERY_UNKNOWN",
             "created_at": workflow.iso_now(),
             "applied": False,
@@ -1379,7 +1381,7 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(workflow.DeliveryError):
                 workflow.execute_exchange(
                     task_dir=task_dir,
-                    chat_url="https://chatgpt.com/c/tx-test",
+                    chat_url="https://chatgpt.com/c/2e9e1350-2a21-533f-b2b5-82a6d31435c4",
                     _test_transport_response="{}",
                 )
 
@@ -1403,7 +1405,7 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": msg,
             "message_hash": req_hash,
-            "chat_url": "https://chatgpt.com/c/strict-tx",
+            "chat_url": "https://chatgpt.com/c/b6bcf0dc-ca48-57c4-8230-7338a43e408d",
             "delivery_status": "CONFIRMED_USER_TURN",
             "created_at": workflow.iso_now(),
             "applied": False,
@@ -1440,7 +1442,7 @@ class WorkflowTests(unittest.TestCase):
                 with self.assertRaises(workflow.DeliveryError):
                     workflow.execute_exchange(
                         task_dir=task_dir,
-                        chat_url="https://chatgpt.com/c/strict-tx",
+                        chat_url="https://chatgpt.com/c/b6bcf0dc-ca48-57c4-8230-7338a43e408d",
                     )
                 mock_relay_cls.assert_not_called()
 
@@ -1481,7 +1483,7 @@ class WorkflowTests(unittest.TestCase):
                 with self.assertRaises(workflow.DeliveryError):
                     workflow.execute_exchange(
                         task_dir=task_dir,
-                        chat_url="https://chatgpt.com/c/strict-tx",
+                        chat_url="https://chatgpt.com/c/b6bcf0dc-ca48-57c4-8230-7338a43e408d",
                     )
                 mock_relay_cls.assert_not_called()
 
@@ -1509,7 +1511,7 @@ class WorkflowTests(unittest.TestCase):
         with mock.patch("workflow.BrowserRelay") as mock_relay_cls:
             blocked_res = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/strict-tx",
+                chat_url="https://chatgpt.com/c/b6bcf0dc-ca48-57c4-8230-7338a43e408d",
             )
             self.assertEqual(blocked_res["status"], "BLOCKED")
             self.assertIn("BLOCKED_MATERIALS", blocked_res["reason"])
@@ -1538,12 +1540,12 @@ class WorkflowTests(unittest.TestCase):
             instance.run_e2e_review.return_value = {
                 "status": "SUCCESS",
                 "response_text": rev_resp,
-                "chat_url": "https://chatgpt.com/c/strict-tx",
+                "chat_url": "https://chatgpt.com/c/b6bcf0dc-ca48-57c4-8230-7338a43e408d",
                 "tab_id": "tab-1",
             }
             formal_rev = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/strict-tx",
+                chat_url="https://chatgpt.com/c/b6bcf0dc-ca48-57c4-8230-7338a43e408d",
             )
             self.assertEqual(formal_rev["status"], "SUCCESS")
             self.assertEqual(formal_rev["decision"], "ACCEPTED")
@@ -1721,7 +1723,7 @@ class WorkflowTests(unittest.TestCase):
             title="F-001 Option A Drift Read-Only Task",
             task_id="f001a-drift-task",
             repo_url="https://github.com/example/repo",
-            chat_url="https://chatgpt.com/c/original-chat",
+            chat_url="https://chatgpt.com/c/1c04b0b0-1a98-5ce6-8382-83a4e46bb60e",
             model="o3-mini",
             thinking_mode="high",
         )
@@ -1737,7 +1739,7 @@ class WorkflowTests(unittest.TestCase):
             with mock.patch("workflow.BrowserRelay") as mock_relay_cls:
                 res_untracked = workflow.execute_exchange(
                     task_dir=task_dir,
-                    chat_url="https://chatgpt.com/c/should-not-persist",
+                    chat_url="https://chatgpt.com/c/2130dc51-8334-581e-8efe-65409af0dad9",
                     dry_run=True,
                 )
                 mock_relay_cls.assert_not_called()
@@ -1749,7 +1751,7 @@ class WorkflowTests(unittest.TestCase):
             st_after_untracked = workflow.load_state(task_dir)
             self.assertEqual(st_after_untracked["stage"], workflow.STAGE_WAITING_PLAN)
             self.assertIsNone(st_after_untracked["active_transaction"])
-            self.assertEqual(st_after_untracked["chat_url"], "https://chatgpt.com/c/original-chat")
+            self.assertEqual(st_after_untracked["chat_url"], "https://chatgpt.com/c/1c04b0b0-1a98-5ce6-8382-83a4e46bb60e")
             self.assertFalse(req_file.exists())
         finally:
             if untracked.exists():
@@ -1766,7 +1768,7 @@ class WorkflowTests(unittest.TestCase):
             with mock.patch("workflow.BrowserRelay") as mock_relay_cls:
                 res_head_drift = workflow.execute_exchange(
                     task_dir=task_dir,
-                    chat_url="https://chatgpt.com/c/should-not-persist",
+                    chat_url="https://chatgpt.com/c/2130dc51-8334-581e-8efe-65409af0dad9",
                     dry_run=True,
                 )
                 mock_relay_cls.assert_not_called()
@@ -1778,7 +1780,7 @@ class WorkflowTests(unittest.TestCase):
             st_after_head = workflow.load_state(task_dir)
             self.assertEqual(st_after_head["stage"], workflow.STAGE_WAITING_PLAN)
             self.assertIsNone(st_after_head["active_transaction"])
-            self.assertEqual(st_after_head["chat_url"], "https://chatgpt.com/c/original-chat")
+            self.assertEqual(st_after_head["chat_url"], "https://chatgpt.com/c/1c04b0b0-1a98-5ce6-8382-83a4e46bb60e")
             self.assertFalse(req_file.exists())
         finally:
             subprocess.run(
@@ -1792,7 +1794,7 @@ class WorkflowTests(unittest.TestCase):
         with mock.patch("workflow.BrowserRelay") as mock_relay_cls:
             res_clean = workflow.execute_exchange(
                 task_dir=task_dir,
-                chat_url="https://chatgpt.com/c/should-not-persist",
+                chat_url="https://chatgpt.com/c/2130dc51-8334-581e-8efe-65409af0dad9",
                 dry_run=True,
             )
             mock_relay_cls.assert_not_called()
@@ -1809,7 +1811,7 @@ class WorkflowTests(unittest.TestCase):
             with mock.patch("workflow.BrowserRelay") as mock_relay_cls:
                 res_formal_drift = workflow.execute_exchange(
                     task_dir=task_dir,
-                    chat_url="https://chatgpt.com/c/should-not-persist",
+                    chat_url="https://chatgpt.com/c/2130dc51-8334-581e-8efe-65409af0dad9",
                     dry_run=False,
                 )
                 mock_relay_cls.assert_not_called()
@@ -1822,7 +1824,7 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(st_formal["blocked_from_stage"], workflow.STAGE_WAITING_PLAN)
             self.assertIn("BLOCKED_SOURCE_CHANGED", st_formal["next_action"])
             self.assertIsNone(st_formal["active_transaction"])
-            self.assertEqual(st_formal["chat_url"], "https://chatgpt.com/c/original-chat")
+            self.assertEqual(st_formal["chat_url"], "https://chatgpt.com/c/1c04b0b0-1a98-5ce6-8382-83a4e46bb60e")
             self.assertFalse(req_file.exists())
         finally:
             if untracked.exists():
@@ -1835,7 +1837,7 @@ class WorkflowTests(unittest.TestCase):
             title="R3P4-001 Drift Recovery Task",
             task_id="r3p4-drift-task",
             repo_url="https://github.com/example/repo",
-            chat_url="https://chatgpt.com/c/r3p4-chat",
+            chat_url="https://chatgpt.com/c/5176e2fa-4888-5631-a5a0-f346234290ed",
         )
         task_dir = self.project_dir / "handoffs" / "r3p4-drift-task"
 
@@ -1972,7 +1974,7 @@ class WorkflowTests(unittest.TestCase):
             inst2.run_e2e_review.return_value = {
                 "status": "SUCCESS",
                 "response_text": rev2_resp,
-                "chat_url": "https://chatgpt.com/c/r3p4-chat",
+                "chat_url": "https://chatgpt.com/c/5176e2fa-4888-5631-a5a0-f346234290ed",
                 "tab_id": "tab-1",
             }
             res_rev2 = workflow.execute_exchange(task_dir=task_dir)
@@ -2016,7 +2018,7 @@ class WorkflowTests(unittest.TestCase):
             title="R3P4-002 Corrupt Transaction Task",
             task_id="r3p4-corrupt-tx-task",
             repo_url="https://github.com/example/repo",
-            chat_url="https://chatgpt.com/c/r3p4-corrupt",
+            chat_url="https://chatgpt.com/c/b91a5aa0-8684-535a-a972-b238cab9f8ab",
         )
         task_dir = self.project_dir / "handoffs" / "r3p4-corrupt-tx-task"
 
@@ -2055,7 +2057,7 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": msg,
             "message_hash": workflow.compute_hash(msg),
-            "chat_url": "https://chatgpt.com/c/r3p4-corrupt",
+            "chat_url": "https://chatgpt.com/c/b91a5aa0-8684-535a-a972-b238cab9f8ab",
             "delivery_status": "SEND_ATTEMPTED",
             "created_at": workflow.iso_now(),
             "applied": False,
@@ -2071,7 +2073,7 @@ class WorkflowTests(unittest.TestCase):
             "head_sha": self.initial_sha,
             "message": plan_msg,
             "message_hash": workflow.compute_hash(plan_msg),
-            "chat_url": "https://chatgpt.com/c/r3p4-corrupt",
+            "chat_url": "https://chatgpt.com/c/b91a5aa0-8684-535a-a972-b238cab9f8ab",
             "delivery_status": "CONFIRMED_USER_TURN",
             "created_at": workflow.iso_now(),
             "applied": True,
@@ -2200,6 +2202,342 @@ ChatGPT 说：
             parsed["data"]["findings"][0]["description"],
             "Commit 7031e14d853c64d2a7eaad1de71fcba84a2171ae does not exist on GitHub.",
         )
+
+
+    def test_pre_click_failure_records_not_sent_and_resends(self):
+        """第一次 relay 返回 {"status":"BLOCKED_DELIVERY_UNCONFIRMED","send_clicked":False,...}，事务记为 NOT_SENT；第二次 exchange 以 skip_send=False、同一个 request_id 调用 relay，SUCCESS 后正常推进。"""
+        state = self._start_task(
+            task_id="pre-click-task",
+            chat_url="https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c",
+            repo_url="https://github.com/example/repo",
+        )
+        task_dir = self.project_dir / "handoffs" / "pre-click-task"
+
+        with mock.patch("workflow.BrowserRelay") as MockRelayFirst:
+            first_inst = MockRelayFirst.return_value
+            first_inst.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            first_inst.run_e2e_review.return_value = {
+                "status": "BLOCKED_DELIVERY_UNCONFIRMED",
+                "error": "Prompt injection not confirmed: INJECT_EMPTY",
+                "send_clicked": False,
+            }
+
+            res1 = workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url="https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c",
+            )
+            self.assertEqual(res1["status"], "BLOCKED")
+            self.assertIn("Prompt injection not confirmed", res1["error"])
+
+            st1 = workflow.load_state(task_dir)
+            self.assertEqual(st1["stage"], workflow.STAGE_BLOCKED)
+            self.assertEqual(st1["active_transaction"]["delivery_status"], "NOT_SENT")
+            self.assertEqual(st1["active_transaction"]["request_id"], "req-pre-click-task-r1-plan")
+            self.assertFalse(st1["active_transaction"]["applied"])
+
+        plan_resp = f"""```json:chatgpt-review
+{{
+  "task_id": "pre-click-task",
+  "round": 1,
+  "reviewed_head_sha": "{self.initial_sha}",
+  "decision": "PLAN_READY",
+  "findings": [],
+  "next_action": "Plan approved on retry"
+}}
+```"""
+        with mock.patch("workflow.BrowserRelay") as MockRelaySecond:
+            second_inst = MockRelaySecond.return_value
+            second_inst.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            second_inst.run_e2e_review.return_value = {
+                "status": "SUCCESS",
+                "response_text": plan_resp,
+                "chat_url": "https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c",
+                "tab_id": "tab-1",
+                "send_clicked": True,
+            }
+
+            res2 = workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url="https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c",
+            )
+            self.assertEqual(res2["status"], "SUCCESS")
+            self.assertEqual(res2["decision"], "PLAN_READY")
+
+            second_inst.run_e2e_review.assert_called_once()
+            call_kwargs = second_inst.run_e2e_review.call_args.kwargs
+            self.assertFalse(call_kwargs["skip_send"])
+            self.assertTrue(call_kwargs["is_recovery"])
+            self.assertEqual(call_kwargs["request_id"], "req-pre-click-task-r1-plan")
+
+            st2 = workflow.load_state(task_dir)
+            self.assertEqual(st2["stage"], workflow.STAGE_WAITING_EXECUTION)
+            self.assertEqual(st2["active_transaction"]["delivery_status"], "CONFIRMED_USER_TURN")
+            self.assertTrue(st2["active_transaction"]["applied"])
+
+    def test_recovery_chat_url_switch_rules(self):
+        """NOT_SENT 的事务换地址成功，previous_chat_urls 含旧地址；DELIVERY_UNKNOWN 的事务换地址抛 WorkflowError，state 文件不变。"""
+        # Case 1: NOT_SENT switches address successfully
+        state1 = self._start_task(
+            task_id="switch-ok-task",
+            chat_url="https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
+            repo_url="https://github.com/example/repo",
+        )
+        task_dir1 = self.project_dir / "handoffs" / "switch-ok-task"
+
+        with mock.patch("workflow.BrowserRelay") as MockRelay1:
+            inst1 = MockRelay1.return_value
+            inst1.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            inst1.run_e2e_review.return_value = {
+                "status": "BLOCKED_DELIVERY_UNCONFIRMED",
+                "error": "Failed before send",
+                "send_clicked": False,
+            }
+            workflow.execute_exchange(
+                task_dir=task_dir1,
+                chat_url="https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
+            )
+
+        st1_before = workflow.load_state(task_dir1)
+        self.assertEqual(st1_before["active_transaction"]["delivery_status"], "NOT_SENT")
+        self.assertEqual(st1_before["chat_url"], "https://chatgpt.com/c/11111111-1111-1111-1111-111111111111")
+
+        new_url_1 = "https://chatgpt.com/c/22222222-2222-2222-2222-222222222222"
+        plan_resp = f"""```json:chatgpt-review
+{{
+  "task_id": "switch-ok-task",
+  "round": 1,
+  "reviewed_head_sha": "{self.initial_sha}",
+  "decision": "PLAN_READY",
+  "findings": [],
+  "next_action": "Plan ready after switch"
+}}
+```"""
+        with mock.patch("workflow.BrowserRelay") as MockRelay2:
+            inst2 = MockRelay2.return_value
+            inst2.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            inst2.run_e2e_review.return_value = {
+                "status": "SUCCESS",
+                "response_text": plan_resp,
+                "chat_url": new_url_1,
+                "tab_id": "tab-1",
+            }
+            res_switch = workflow.execute_exchange(
+                task_dir=task_dir1,
+                chat_url=new_url_1,
+            )
+            self.assertEqual(res_switch["status"], "SUCCESS")
+
+        st1_after = workflow.load_state(task_dir1)
+        self.assertEqual(st1_after["chat_url"], new_url_1)
+        self.assertIn("https://chatgpt.com/c/11111111-1111-1111-1111-111111111111", st1_after["previous_chat_urls"])
+        self.assertEqual(st1_after["active_transaction"]["chat_url"], new_url_1)
+
+        # Case 2: DELIVERY_UNKNOWN rejects switching address with WorkflowError, state unchanged
+        state2 = self._start_task(
+            task_id="switch-fail-task",
+            chat_url="https://chatgpt.com/c/33333333-3333-3333-3333-333333333333",
+            repo_url="https://github.com/example/repo",
+        )
+        task_dir2 = self.project_dir / "handoffs" / "switch-fail-task"
+
+        with mock.patch("workflow.BrowserRelay") as MockRelay3:
+            inst3 = MockRelay3.return_value
+            inst3.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            inst3.run_e2e_review.return_value = {
+                "status": "BLOCKED_DELIVERY_UNCONFIRMED",
+                "error": "Failed after send",
+                "send_clicked": True,
+            }
+            workflow.execute_exchange(
+                task_dir=task_dir2,
+                chat_url="https://chatgpt.com/c/33333333-3333-3333-3333-333333333333",
+            )
+
+        st2_before = workflow.load_state(task_dir2)
+        self.assertEqual(st2_before["active_transaction"]["delivery_status"], "DELIVERY_UNKNOWN")
+        st2_bytes = (task_dir2 / "workflow.json").read_bytes()
+
+        new_url_2 = "https://chatgpt.com/c/44444444-4444-4444-4444-444444444444"
+        with self.assertRaises(workflow.WorkflowError) as cm_switch:
+            workflow.execute_exchange(
+                task_dir=task_dir2,
+                chat_url=new_url_2,
+            )
+        self.assertIn("refusing to switch", str(cm_switch.exception).lower())
+        self.assertEqual((task_dir2 / "workflow.json").read_bytes(), st2_bytes)
+
+    def test_placeholder_chat_url_rejected(self):
+        """start、exchange（含 dry-run）、resume 收到占位地址都抛 WorkflowError。"""
+        placeholder_url = "https://chatgpt.com/c/<问候交流的ID>"
+
+        # 1. start rejects placeholder URL
+        with self.assertRaises(workflow.WorkflowError):
+            workflow.start_workflow(
+                project=self.project_dir,
+                title="Placeholder Test Task",
+                task_id="ph-start-task",
+                chat_url=placeholder_url,
+                repo_url="https://github.com/example/repo",
+            )
+
+        # Start a normal task for exchange and resume testing
+        valid_url = "https://chatgpt.com/c/6ad5e25e-5628-83ed-8cac-6e8e6b447f3c"
+        state = self._start_task(
+            task_id="ph-test-task",
+            chat_url=valid_url,
+        )
+        task_dir = self.project_dir / "handoffs" / "ph-test-task"
+
+        # 2. exchange with dry_run rejects placeholder URL
+        with self.assertRaises(workflow.WorkflowError):
+            workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url=placeholder_url,
+                dry_run=True,
+            )
+
+        # 3. exchange normal run rejects placeholder URL
+        with self.assertRaises(workflow.WorkflowError):
+            workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url=placeholder_url,
+                dry_run=False,
+            )
+
+        # 4. resume rejects placeholder URL
+        with self.assertRaises(workflow.WorkflowError):
+            workflow.resume_workflow(
+                project=self.project_dir,
+                task_id="ph-test-task",
+                chat_url=placeholder_url,
+            )
+
+    def test_not_sent_switch_dry_run_read_only_and_tab_cleared(self):
+        """事务为 NOT_SENT，chat_url 为 A，tab_id 为 'tab-old'。用地址 B 执行 exchange(dry_run=True)，前后 state 文件字节相同。再用 B 正式 exchange，mock 的 relay 收到 target_url_prefix=B、target_tab_id=None；之后 state 中事务的 chat_url 为 B、tab_id 为 None，previous_chat_urls 含 A。"""
+        url_a = "https://chatgpt.com/c/11111111-1111-1111-1111-111111111111"
+        url_b = "https://chatgpt.com/c/22222222-2222-2222-2222-222222222222"
+
+        self._start_task(
+            task_id="switch-tab-task",
+            chat_url=url_a,
+            repo_url="https://github.com/example/repo",
+        )
+        task_dir = self.project_dir / "handoffs" / "switch-tab-task"
+
+        # Pre-seed state with an unapplied NOT_SENT transaction with tab_id="tab-old"
+        st = workflow.load_state(task_dir)
+        req_id = "req-switch-tab-task-r1-plan"
+        msg = workflow.build_plan_request_message(st, task_dir, req_id, self.project_dir)
+        req_hash = workflow.compute_hash(msg)
+        st["active_transaction"] = {
+            "request_id": req_id,
+            "kind": "plan",
+            "round": 1,
+            "head_sha": self.initial_sha,
+            "message": msg,
+            "message_hash": req_hash,
+            "chat_url": url_a,
+            "tab_id": "tab-old",
+            "model": None,
+            "thinking_mode": None,
+            "delivery_status": "NOT_SENT",
+            "created_at": workflow.iso_now(),
+            "applied": False,
+        }
+        workflow.save_state(task_dir, st)
+
+        state_bytes_before = (task_dir / "workflow.json").read_bytes()
+
+        # dry_run=True with url_b must be strictly read-only
+        res_dry = workflow.execute_exchange(
+            task_dir=task_dir,
+            chat_url=url_b,
+            dry_run=True,
+        )
+        self.assertEqual(res_dry["status"], "DRY_RUN")
+        state_bytes_after_dry = (task_dir / "workflow.json").read_bytes()
+        self.assertEqual(state_bytes_before, state_bytes_after_dry)
+
+        # Formal exchange with url_b
+        plan_resp = f"""```json:chatgpt-review
+{{
+  "task_id": "switch-tab-task",
+  "round": 1,
+  "reviewed_head_sha": "{self.initial_sha}",
+  "decision": "PLAN_READY",
+  "findings": [],
+  "next_action": "Proceed"
+}}
+```"""
+        with mock.patch("workflow.BrowserRelay") as MockRelay:
+            inst = MockRelay.return_value
+            inst.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            inst.run_e2e_review.return_value = {
+                "status": "SUCCESS",
+                "response_text": plan_resp,
+                "chat_url": url_b,
+                "tab_id": "new-tab",
+            }
+            res_formal = workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url=url_b,
+            )
+            self.assertEqual(res_formal["status"], "SUCCESS")
+
+            inst.run_e2e_review.assert_called_once()
+            call_kwargs = inst.run_e2e_review.call_args.kwargs
+            self.assertEqual(call_kwargs["target_url_prefix"], url_b)
+            self.assertIsNone(call_kwargs["target_tab_id"])
+
+        st_final = workflow.load_state(task_dir)
+        self.assertEqual(st_final["active_transaction"]["chat_url"], url_b)
+        self.assertIsNone(st_final["active_transaction"]["tab_id"])
+        self.assertIn(url_a, st_final.get("previous_chat_urls", []))
+
+    def test_placeholder_rejected_before_stage_returns(self):
+        """任务处于 WAITING_EXECUTION，用占位地址 exchange，抛 WorkflowError。"""
+        placeholder_url = "https://chatgpt.com/c/<问候交流的ID>"
+        self._start_task(
+            task_id="ph-stage-task",
+            chat_url="https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
+            repo_url="https://github.com/example/repo",
+        )
+        task_dir = self.project_dir / "handoffs" / "ph-stage-task"
+        st = workflow.load_state(task_dir)
+        st["stage"] = workflow.STAGE_WAITING_EXECUTION
+        workflow.save_state(task_dir, st)
+
+        with self.assertRaises(workflow.WorkflowError):
+            workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url=placeholder_url,
+            )
+
+    def test_no_browser_records_not_sent(self):
+        """mock 的 relay 返回 {"status": "BLOCKED_NO_BROWSER", "send_clicked": False, ...}，事务 delivery_status 为 NOT_SENT。"""
+        self._start_task(
+            task_id="no-browser-tx-task",
+            chat_url="https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
+            repo_url="https://github.com/example/repo",
+        )
+        task_dir = self.project_dir / "handoffs" / "no-browser-tx-task"
+
+        with mock.patch("workflow.BrowserRelay") as MockRelay:
+            inst = MockRelay.return_value
+            inst.check_status.return_value = mock.Mock(daemon_running=True, connected_browser_id="b-1")
+            inst.run_e2e_review.return_value = {
+                "status": "BLOCKED_NO_BROWSER",
+                "error": "bsk daemon or browser not available",
+                "send_clicked": False,
+            }
+            res = workflow.execute_exchange(
+                task_dir=task_dir,
+                chat_url="https://chatgpt.com/c/11111111-1111-1111-1111-111111111111",
+            )
+            self.assertEqual(res["status"], "BLOCKED")
+
+        st = workflow.load_state(task_dir)
+        self.assertEqual(st["active_transaction"]["delivery_status"], "NOT_SENT")
 
 
 if __name__ == "__main__":
