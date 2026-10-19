@@ -843,30 +843,31 @@ class BrowserRelay:
         el = candidateList[0];
     }}
 
+    const rawMsg = {encoded_msg};
     function normalize(s) {{
         return (s || '').replace(/\\s+/g, '');
     }}
 
-    const targetNorm = normalize({encoded_msg});
+    const targetNorm = normalize(rawMsg);
 
     let execCmdSuccess = true;
     if (el.tagName.toLowerCase() === 'textarea') {{
-        el.value = {encoded_msg};
+        el.value = rawMsg;
         el.dispatchEvent(new Event('input', {{ bubbles: true }}));
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }} else {{
         el.focus();
         if (typeof document.execCommand === 'function') {{
             document.execCommand('selectAll', false, null);
-            const cmdOk = document.execCommand('insertText', false, {encoded_msg});
+            const cmdOk = document.execCommand('insertText', false, rawMsg);
             if (cmdOk === false) {{
                 execCmdSuccess = false;
             }}
         }} else {{
-            el.innerText = {encoded_msg};
+            el.innerText = rawMsg;
         }}
         if (typeof InputEvent !== 'undefined') {{
-            el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: {encoded_msg} }}));
+            el.dispatchEvent(new InputEvent('input', {{ bubbles: true, inputType: 'insertText', data: rawMsg }}));
         }} else {{
             el.dispatchEvent(new Event('input', {{ bubbles: true }}));
         }}
