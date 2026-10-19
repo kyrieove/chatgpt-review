@@ -1,0 +1,13 @@
+VERDICT: FAIL
+
+1. [P1] skills/chatgpt-review/scripts/workflow.py:1565 — Switching a `NOT_SENT` transaction to another chat retains its old tab ID. Line 1575 confirms: `target_tab_id = active_tx.get("tab_id") or target_tab_id`. Even a newly supplied tab ID loses; `browser_relay.py:619` then rejects the old tab against the new URL. Fix: clear the persisted tab ID when switching chats, or replace it with the explicitly supplied new ID.
+
+2. [P1] skills/chatgpt-review/scripts/workflow.py:1562 — Recovery with `--dry-run --chat-url NEW` writes the new chat address, history and transaction to disk. Confirming lines: `update_chat_url(task_dir, chat_url)` and `save_state(task_dir, state)` at 1566 execute before `if dry_run:` at 1591. Fix: defer these mutations until after the dry-run return.
+
+3. [P1] skills/chatgpt-review/scripts/workflow.py:1547 — **Conditional URL validation bypasses** leave placeholders accepted on several paths. Grep identified all bypass locations: exchange returns at 1491, stage branches at 1493/1498/1503, returns at 1529/1531; resume’s equality guard at 1805. For example, an accepted task returns `ACCEPTED` before validation; resuming a legacy task with its existing placeholder skips validation because `if chat_url and chat_url != state.get("chat_url"):` is false. Fix: validate every supplied nonempty URL before these branches.
+
+4. [P1] skills/chatgpt-review/scripts/browser_relay.py:1289 — The new pre-click classification misses the no-browser return. Line 1285 returns before the reset and `finally`, so its journal lacks `send_clicked`. Workflow line 1713 requires `res.get("send_clicked") is False`; it therefore records `DELIVERY_UNKNOWN`, and recovery permanently skips sending despite no click. Fix: initialize the journal field to `False` before this return and update it when sending becomes possible.
+
+5. [P1] tests/test_browser_relay.py:931 — The visible-editor test exercises a copied injection implementation, so it also passes against the old production code, violating Step 7. Confirming line 996: `raw_res = self.run_in_dom(dom, test_js)`. Fix: capture the injection JavaScript actually passed by `send_prompt` to `evaluate` and execute that in the fixture.
+
+Pre-existing, outside verdict: recovery permits a new URL when the transaction URL is absent (workflow.py:1638); `resume` switches addresses without checking delivery status (1808). Existing test assertions were preserved apart from UUID substitutions.
