@@ -647,7 +647,9 @@ class BrowserRelayTests(unittest.TestCase):
              mock.patch.object(self.relay, "start_session") as mock_start, \
              mock.patch.object(self.relay, "find_target_tab") as mock_find, \
              mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "create_new_chat") as mock_create, \
              mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "check_model_and_thinking") as mock_check, \
              mock.patch.object(self.relay, "send_prompt") as mock_send, \
              mock.patch.object(self.relay, "wait_for_response") as mock_wait, \
              mock.patch.object(self.relay, "return_tab") as mock_return, \
@@ -657,7 +659,9 @@ class BrowserRelayTests(unittest.TestCase):
             mock_start.return_value = "sess-1"
             mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/conv-1")
             mock_borrow.return_value = True
-            mock_url.return_value = "https://chatgpt.com/c/conv-1"
+            mock_create.return_value = {"ok": True, "url": "https://chatgpt.com/"}
+            mock_url.side_effect = ["https://chatgpt.com/c/conv-1", "https://chatgpt.com/"]
+            mock_check.return_value = {"verified": True, "status": "OK", "model": "ChatGPT", "thinking_mode": "High"}
             mock_send.return_value = True
             mock_wait.return_value = {"status": "COMPLETE", "text": "All good", "length": 8}
             mock_return.return_value = False
@@ -676,6 +680,16 @@ class BrowserRelayTests(unittest.TestCase):
                     "tag": "button",
                     "attrs": {"data-testid": "model-switcher-dropdown-button"},
                     "text": "ChatGPT (o1)",
+                },
+                {
+                    "tag": "form",
+                    "children": [
+                        {
+                            "tag": "button",
+                            "attrs": {"data-testid": "thought-picker"},
+                            "text": "Thought (Medium)",
+                        },
+                    ],
                 },
                 {
                     "tag": "button",
@@ -797,6 +811,7 @@ class BrowserRelayTests(unittest.TestCase):
              mock.patch.object(self.relay, "start_session") as mock_start, \
              mock.patch.object(self.relay, "find_target_tab") as mock_find, \
              mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "create_new_chat") as mock_create, \
              mock.patch.object(self.relay, "get_current_url") as mock_url, \
              mock.patch.object(self.relay, "check_model_and_thinking") as mock_check, \
              mock.patch.object(self.relay, "return_tab") as mock_return, \
@@ -806,7 +821,8 @@ class BrowserRelayTests(unittest.TestCase):
             mock_start.return_value = "sess-1"
             mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/conv-1")
             mock_borrow.return_value = True
-            mock_url.return_value = "https://chatgpt.com/c/conv-1"
+            mock_create.return_value = {"ok": True, "url": "https://chatgpt.com/"}
+            mock_url.side_effect = ["https://chatgpt.com/c/conv-1", "https://chatgpt.com/"]
             mock_check.return_value = {
                 "verified": False,
                 "status": "BLOCKED_MODEL_MISMATCH",
@@ -1068,6 +1084,111 @@ class BrowserRelayTests(unittest.TestCase):
         self.assertEqual(diag.get("units"), 4)
         self.assertEqual(diag.get("bubbles"), 2)
         self.assertIs(diag.get("mainHasReq"), False)
+
+    # --- F-001, F-002, F-003 Regressions ---
+
+    def test_f001_create_new_chat_failure_and_leaving_old_conversation(self):
+        """F-001: Navigation failure during create_new_chat or failing to leave old /c/... must return BLOCKED_NAVIGATION_FAILED."""
+        with mock.patch.object(self.relay, "check_status") as mock_status, \
+             mock.patch.object(self.relay, "start_session") as mock_start, \
+             mock.patch.object(self.relay, "find_target_tab") as mock_find, \
+             mock.patch.object(self.relay, "borrow_tab") as mock_borrow, \
+             mock.patch.object(self.relay, "create_new_chat") as mock_create, \
+             mock.patch.object(self.relay, "get_current_url") as mock_url, \
+             mock.patch.object(self.relay, "return_tab") as mock_return, \
+             mock.patch.object(self.relay, "stop_session") as mock_stop:
+
+            mock_status.return_value = browser_relay.BrowserStatus(daemon_running=True, connected_browser_id="b-1")
+            mock_start.return_value = "sess-f001"
+            mock_find.return_value = TabInfo("tab-1", "user", "w-1", "ChatGPT", "https://chatgpt.com/c/old-conv")
+            mock_borrow.return_value = True
+            mock_return.return_value = True
+            mock_stop.return_value = True
+
+            # Case A: Navigation failed
+            mock_url.return_value = "https://chatgpt.com/c/old-conv"
+            mock_create.return_value = {"ok": False, "error": "timeout"}
+            res_fail = self.relay.run_e2e_review("task-f001", "msg [REQ-1]", "REQ-1")
+            self.assertEqual(res_fail["status"], "BLOCKED_NAVIGATION_FAILED")
+
+            # Case B: Navigation reported ok but URL did not leave /c/...
+            mock_create.return_value = {"ok": True, "url": "https://chatgpt.com/"}
+            mock_url.side_effect = ["https://chatgpt.com/c/old-conv", "https://chatgpt.com/c/old-conv"]
+            res_stuck = self.relay.run_e2e_review("task-f001", "msg [REQ-1]", "REQ-1")
+            self.assertEqual(res_stuck["status"], "BLOCKED_NAVIGATION_FAILED")
+
+    def test_f002_exec_command_failure_or_draft_collision_aborts_send(self):
+        """F-002: If execCommand returns false or editor content does not match target message exactly, must raise NotSentError."""
+        # Using run_in_dom with a custom document.execCommand that returns false
+        req_id = "REQ-F002"
+        target_msg = f"Clean message without draft [{req_id}]"
+
+        class _Captured(Exception):
+            def __init__(self, js: str):
+                self.js = js
+
+        with mock.patch.object(self.relay, "check_user_turn_exists") as mock_check, \
+             mock.patch.object(self.relay, "evaluate") as mock_eval:
+            mock_check.return_value = {"exists": False, "status": "USER_TURN_NOT_FOUND"}
+            def _eval_side_effect(session_id, js):
+                raise _Captured(js)
+            mock_eval.side_effect = _eval_side_effect
+            try:
+                self.relay.send_prompt("sess-1", target_msg, req_id)
+            except _Captured as exc:
+                captured_js = exc.js
+
+        # Construct DOM with pre-existing draft
+        dom = {
+            "tag": "form",
+            "children": [
+                {
+                    "tag": "div",
+                    "attrs": {"contenteditable": "true", "id": "prompt-textarea"},
+                    "text": "Pre-existing draft that was not overwritten ",
+                }
+            ]
+        }
+        # In Node fixture, test with partial mismatch
+        test_script = f"""(() => {{
+            document.execCommand = function(cmd, showUI, val) {{
+                return false; // Simulating execCommand failure
+            }};
+            const res = ({captured_js});
+            return res;
+        }})()"""
+        node_res = self.run_in_dom(dom, test_script)
+        self.assertTrue(isinstance(node_res, str) and node_res.startswith("INJECT_EMPTY"))
+
+    def test_f003_historical_thought_ignored_and_unknown_mode_blocked(self):
+        """F-003: Thought buttons in history or outside composer/model must not be used as active thinking mode."""
+        dom = {
+            "tag": "main",
+            "children": [
+                {
+                    "tag": "button",
+                    "attrs": {"data-testid": "model-switcher-dropdown-button"},
+                    "text": "ChatGPT",
+                },
+                {
+                    # In history, outside of composer / model switcher
+                    "tag": "article",
+                    "attrs": {"data-message-author-role": "assistant"},
+                    "children": [
+                        {
+                            "tag": "button",
+                            "attrs": {"data-testid": "thought-duration"},
+                            "text": "Thought for 45 seconds",
+                        }
+                    ]
+                },
+            ],
+        }
+        js = build_check_model_and_thinking_js()
+        res = self.run_in_dom(dom, js)
+        self.assertEqual(res["model"], "ChatGPT")
+        # Historical thought duration button must NOT be picked as active thinking mode
+        self.assertEqual(res["thinking_mode"], "")
 
 
 if __name__ == "__main__":

@@ -362,6 +362,28 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(parsed["valid"])
         self.assertIn("Round mismatch", parsed["reason"])
 
+    def test_f004_non_integer_round_rejected(self):
+        """F-004 Regression: boolean, float, and string round values must fail with BLOCKED_MALFORMED_ROUND."""
+        for invalid_val in [True, False, 1.9, "1", "one"]:
+            json_str = json.dumps({
+                "task_id": "round-type-task",
+                "round": invalid_val,
+                "reviewed_head_sha": self.initial_sha,
+                "decision": "ACCEPTED",
+                "findings": [],
+                "next_action": "Done"
+            })
+            resp = f"```json:chatgpt-review\n{json_str}\n```"
+            parsed = workflow.parse_and_validate_review_response(
+                response_text=resp,
+                expected_task_id="round-type-task",
+                expected_round=1,
+                expected_head_sha=self.initial_sha,
+                expected_stage=workflow.STAGE_WAITING_REVIEW,
+            )
+            self.assertFalse(parsed["valid"])
+            self.assertEqual(parsed["status"], "BLOCKED_MALFORMED_ROUND")
+
     def test_missing_structure_cannot_accept_on_text_alone(self):
         """6. Response without machine-readable JSON block fails closed; text saying '通过' does not count."""
         response = "本次代码实现得很棒，全部验收项通过，测试完美，建议直接合并通过！"

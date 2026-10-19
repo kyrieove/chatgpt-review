@@ -451,22 +451,41 @@ def build_check_model_and_thinking_js() -> str:
     }
 
     let thinkingMode = '';
-    const thinkingBtn = document.querySelector('button[data-testid*="reasoning"]') ||
-                        document.querySelector('[data-testid*="thought"]') ||
-                        document.querySelector('button[aria-label*="Thinking"]') ||
-                        document.querySelector('button[aria-label*="思考"]');
-    if (thinkingBtn) {
-        thinkingMode = (thinkingBtn.innerText || thinkingBtn.textContent || '').trim();
-    }
-    if (!thinkingMode) {
-        const composerPills = Array.from(document.querySelectorAll('button[aria-label*="选择 ChatGPT 模型"], button[aria-label*="Select model"], button[aria-label*="Reasoning effort"]'));
-        for (const p of composerPills) {
-            const txt = (p.innerText || p.textContent || '').trim();
-            if (/^(high|medium|low|高|中|低)$/i.test(txt)) {
+    const scopes = [];
+    const composer = document.querySelector('form') ||
+                     document.querySelector('#composer-background') ||
+                     document.querySelector('[data-testid="composer-background"]') ||
+                     document.querySelector('footer');
+    if (composer) scopes.push(composer);
+    const modeBtn = document.querySelector('button[aria-label*="当前模式"], button[aria-label*="Current mode"]');
+    if (modeBtn && !scopes.includes(modeBtn)) scopes.push(modeBtn);
+
+    for (const scope of scopes) {
+        const thinkingBtn = scope.querySelector ? (
+            scope.querySelector('button[data-testid*="reasoning"]') ||
+            scope.querySelector('button[aria-label*="Thinking"]') ||
+            scope.querySelector('button[aria-label*="思考"]') ||
+            scope.querySelector('button[aria-label*="Reasoning"]') ||
+            scope.querySelector('[data-testid*="thought"]')
+        ) : null;
+        if (thinkingBtn) {
+            const txt = (thinkingBtn.innerText || thinkingBtn.textContent || '').trim();
+            if (txt) {
                 thinkingMode = txt;
                 break;
             }
         }
+        const composerPills = scope.querySelectorAll ? Array.from(
+            scope.querySelectorAll('button[aria-label*="选择 ChatGPT 模型"], button[aria-label*="Select model"], button[aria-label*="Reasoning effort"], button')
+        ) : [];
+        for (const p of composerPills) {
+            const txt = (p.innerText || p.textContent || '').trim();
+            if (/^(high|medium|low|高|中|低|standard|extended)$/i.test(txt)) {
+                thinkingMode = txt;
+                break;
+            }
+        }
+        if (thinkingMode) break;
     }
 
     return JSON.stringify({
@@ -824,6 +843,13 @@ class BrowserRelay:
         el = candidateList[0];
     }}
 
+    function normalize(s) {{
+        return (s || '').replace(/\\s+/g, '');
+    }}
+
+    const targetNorm = normalize({encoded_msg});
+
+    let execCmdSuccess = true;
     if (el.tagName.toLowerCase() === 'textarea') {{
         el.value = {encoded_msg};
         el.dispatchEvent(new Event('input', {{ bubbles: true }}));
@@ -832,7 +858,10 @@ class BrowserRelay:
         el.focus();
         if (typeof document.execCommand === 'function') {{
             document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, {encoded_msg});
+            const cmdOk = document.execCommand('insertText', false, {encoded_msg});
+            if (cmdOk === false) {{
+                execCmdSuccess = false;
+            }}
         }} else {{
             el.innerText = {encoded_msg};
         }}
@@ -844,11 +873,11 @@ class BrowserRelay:
         el.dispatchEvent(new Event('change', {{ bubbles: true }}));
     }}
 
-    const reqId = {encoded_req_id};
     const elText = el.innerText || el.value || '';
     const active = document.activeElement;
     const activeText = active ? (active.innerText || active.value || '') : '';
-    if (elText.includes(reqId) || activeText.includes(reqId)) {{
+
+    if (execCmdSuccess && (normalize(elText) === targetNorm || normalize(activeText) === targetNorm)) {{
         return 'OK';
     }}
 
@@ -862,11 +891,14 @@ class BrowserRelay:
         tag: (el.tagName || '').toLowerCase(),
         id: el.id || '',
         ce: el.getAttribute('contenteditable'),
-        visible: isVisible(el)
+        visible: isVisible(el),
+        textLength: elText.length,
+        execCmdSuccess: execCmdSuccess
     }};
     const activeDiag = active ? {{
         tag: (active.tagName || '').toLowerCase(),
-        id: active.id || ''
+        id: active.id || '',
+        textLength: activeText.length
     }} : null;
 
     return 'INJECT_EMPTY:' + JSON.stringify({{
@@ -927,11 +959,15 @@ class BrowserRelay:
         el = candidateList[0];
     }}
 
-    const reqId = {encoded_req_id};
+    function normalize(s) {{
+        return (s || '').replace(/\\s+/g, '');
+    }}
+
+    const targetNorm = normalize({encoded_msg});
     const elText = el.innerText || el.value || '';
     const active = document.activeElement;
     const activeText = active ? (active.innerText || active.value || '') : '';
-    if (elText.includes(reqId) || activeText.includes(reqId)) {{
+    if (normalize(elText) === targetNorm || normalize(activeText) === targetNorm) {{
         return 'OK';
     }}
     return 'MISSING';
@@ -1316,8 +1352,17 @@ class BrowserRelay:
                     raise ConversationMismatchError("Cannot recover exchange without explicit target conversation URL or tab ID; create_new_chat is forbidden during recovery")
                 if "/c/" in live_url:
                     create_res = self.create_new_chat(session_id)
-                    if create_res.get("ok"):
-                        live_url = self.get_current_url(session_id)
+                    if not create_res.get("ok"):
+                        journal_entry["status"] = "BLOCKED_NAVIGATION_FAILED"
+                        journal_entry["error"] = f"Failed to create new chat session: {create_res.get('error')}"
+                        journal_entry["manual_fallback_required"] = True
+                        return journal_entry
+                    live_url = self.get_current_url(session_id)
+                    if "/c/" in live_url:
+                        journal_entry["status"] = "BLOCKED_NAVIGATION_FAILED"
+                        journal_entry["error"] = f"Failed to leave previous conversation: still on '{live_url}' after create_new_chat"
+                        journal_entry["manual_fallback_required"] = True
+                        return journal_entry
                 expected_target_url = "https://chatgpt.com/"
             else:
                 if not match_conversation_url(target_tab.url, live_url):

@@ -581,16 +581,15 @@ def parse_and_validate_review_response(
 
     # Safe validate round
     raw_round = data.get("round")
-    try:
-        parsed_round = int(raw_round)
-    except (TypeError, ValueError):
+    if type(raw_round) is not int:
         return {
             "valid": False,
             "status": "BLOCKED_MALFORMED_ROUND",
-            "reason": f"Invalid round format in JSON: expected integer {expected_round}, got '{raw_round}'",
+            "reason": f"Invalid round format in JSON: expected integer {expected_round}, got {type(raw_round).__name__} ({raw_round!r})",
             "data": data,
         }
 
+    parsed_round = raw_round
     if parsed_round != int(expected_round):
         return {
             "valid": False,
